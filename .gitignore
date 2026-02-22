@@ -1,0 +1,4 @@
+kb
+dist/
+*.db
+.DS_Store
