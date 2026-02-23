@@ -26,8 +26,10 @@ var (
 				Padding(0, 1)
 
 	priorityStyles = map[string]lipgloss.Style{
-		"urgent": lipgloss.NewStyle().Bold(true).Italic(true),
-		"high":   lipgloss.NewStyle().Bold(true),
+		"urgent": lipgloss.NewStyle().Bold(true).Italic(true).
+			Foreground(lipgloss.AdaptiveColor{Light: "1", Dark: "9"}),
+		"high": lipgloss.NewStyle().Bold(true).
+			Foreground(lipgloss.AdaptiveColor{Light: "3", Dark: "11"}),
 		"medium": lipgloss.NewStyle(),
 		"low":    lipgloss.NewStyle().Faint(true),
 	}

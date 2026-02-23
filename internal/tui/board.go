@@ -26,6 +26,7 @@ type boardModel struct {
 	moveCard     *model.Card
 	showHelp     bool
 	err          error
+	feedback     string
 }
 
 type boardLoadedMsg struct {
@@ -66,13 +67,22 @@ func (a *App) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.clampCardSelection()
 		a.adjustScroll()
 
-	case cardMovedMsg, cardArchivedMsg, cardDeletedMsg:
+	case cardMovedMsg:
+		a.board.feedback = "Card moved"
+		return a, a.loadBoard()
+	case cardArchivedMsg:
+		a.board.feedback = "Card archived"
+		return a, a.loadBoard()
+	case cardDeletedMsg:
+		a.board.feedback = "Card deleted"
 		return a, a.loadBoard()
 
 	case errMsg:
 		a.board.err = msg.err
 
 	case tea.KeyMsg:
+		a.board.feedback = ""
+
 		if a.board.filtering {
 			return a.updateBoardFiltering(msg)
 		}
@@ -550,7 +560,22 @@ func (a *App) viewBoard() string {
 		h = 24
 	}
 
+	totalCards := 0
+	for _, cards := range a.board.cards {
+		totalCards += len(cards)
+	}
+	doneCards := 0
+	if len(a.board.columns) > 0 {
+		lastCol := a.board.columns[len(a.board.columns)-1]
+		doneCards = len(a.board.cards[lastCol.ID])
+	}
+
 	titleText := fmt.Sprintf(" kb: %s ", a.board.board.Name)
+	if totalCards > 0 {
+		bar := progressBar(doneCards, totalCards, 10)
+		titleText = fmt.Sprintf(" kb: %s  %s %d/%d ",
+			a.board.board.Name, bar, doneCards, totalCards)
+	}
 	titleBar := titleBarStyle.Width(w).Render(titleText)
 
 	statusText := " hjkl: navigate   HJKL: move/reorder   n: new   Enter: view   e: edit   d: archive   b: boards   ?: help   q: quit"
@@ -571,6 +596,8 @@ func (a *App) viewBoard() string {
 	errBar := ""
 	if a.board.err != nil {
 		errBar = errorStyle.Render(fmt.Sprintf(" Error: %s", a.board.err))
+	} else if a.board.feedback != "" {
+		errBar = helpStyle.Render(fmt.Sprintf(" %s", a.board.feedback))
 	}
 
 	scrollBar := ""
@@ -806,6 +833,14 @@ func (a *App) viewBoardHelp() string {
 	content := lipgloss.Place(w, contentHeight, lipgloss.Center, lipgloss.Center, dialog)
 
 	return lipgloss.JoinVertical(lipgloss.Left, titleBar, content, statusBar)
+}
+
+func progressBar(done, total, width int) string {
+	if total == 0 {
+		return ""
+	}
+	filled := width * done / total
+	return strings.Repeat("━", filled) + strings.Repeat("░", width-filled)
 }
 
 func truncate(s string, maxLen int) string {

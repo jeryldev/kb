@@ -2,6 +2,7 @@ package tui
 
 import (
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/jeryldev/kb/internal/model"
@@ -683,5 +684,105 @@ func TestTruncateEdgeCases(t *testing.T) {
 	}
 	if got := truncate("Hello World", 5); got != "Hell…" {
 		t.Errorf("truncate long = %q, want %q", got, "Hell…")
+	}
+}
+
+// --- Feedback tests ---
+
+func TestFeedbackSetOnCardMoved(t *testing.T) {
+	app := testApp(testColumns(), testCards())
+
+	app.updateBoard(cardMovedMsg{})
+
+	if app.board.feedback != "Card moved" {
+		t.Errorf("feedback = %q, want %q", app.board.feedback, "Card moved")
+	}
+}
+
+func TestFeedbackSetOnCardArchived(t *testing.T) {
+	app := testApp(testColumns(), testCards())
+
+	app.updateBoard(cardArchivedMsg{})
+
+	if app.board.feedback != "Card archived" {
+		t.Errorf("feedback = %q, want %q", app.board.feedback, "Card archived")
+	}
+}
+
+func TestFeedbackSetOnCardDeleted(t *testing.T) {
+	app := testApp(testColumns(), testCards())
+
+	app.updateBoard(cardDeletedMsg{})
+
+	if app.board.feedback != "Card deleted" {
+		t.Errorf("feedback = %q, want %q", app.board.feedback, "Card deleted")
+	}
+}
+
+func TestFeedbackClearedOnKeypress(t *testing.T) {
+	app := testApp(testColumns(), testCards())
+	app.board.feedback = "Card moved"
+
+	app.updateBoard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+
+	if app.board.feedback != "" {
+		t.Errorf("feedback = %q, want empty after keypress", app.board.feedback)
+	}
+}
+
+// --- Progress bar tests ---
+
+func TestProgressBar(t *testing.T) {
+	got := progressBar(3, 10, 10)
+	want := "━━━░░░░░░░"
+	if got != want {
+		t.Errorf("progressBar(3, 10, 10) = %q, want %q", got, want)
+	}
+}
+
+func TestProgressBarEmpty(t *testing.T) {
+	got := progressBar(0, 0, 10)
+	if got != "" {
+		t.Errorf("progressBar(0, 0, 10) = %q, want empty", got)
+	}
+}
+
+func TestProgressBarFull(t *testing.T) {
+	got := progressBar(5, 5, 10)
+	want := "━━━━━━━━━━"
+	if got != want {
+		t.Errorf("progressBar(5, 5, 10) = %q, want %q", got, want)
+	}
+}
+
+// --- Relative time tests ---
+
+func TestRelativeTime(t *testing.T) {
+	original := timeNow
+	defer func() { timeNow = original }()
+
+	now := time.Date(2026, 2, 23, 12, 0, 0, 0, time.UTC)
+	timeNow = func() time.Time { return now }
+
+	tests := []struct {
+		name string
+		t    time.Time
+		want string
+	}{
+		{"just now", now.Add(-30 * time.Second), "just now"},
+		{"minutes ago", now.Add(-5 * time.Minute), "5m ago"},
+		{"hours ago", now.Add(-3 * time.Hour), "3h ago"},
+		{"days ago", now.Add(-2 * 24 * time.Hour), "2d ago"},
+		{"weeks ago", now.Add(-14 * 24 * time.Hour), "2w ago"},
+		{"old date", time.Date(2025, 6, 15, 0, 0, 0, 0, time.UTC), "15 Jun 2025"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := relativeTime(tt.t)
+			if got != tt.want {
+				t.Errorf("relativeTime() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

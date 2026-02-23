@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -11,6 +12,26 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+var timeNow = time.Now
+
+func relativeTime(t time.Time) string {
+	d := timeNow().Sub(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	case d < 7*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dw ago", int(d.Hours()/(24*7)))
+	default:
+		return t.Format("02 Jan 2006")
+	}
+}
 
 type cardViewModel struct {
 	card       *model.Card
@@ -144,8 +165,8 @@ func (a *App) viewCardReadonly() string {
 			))
 	}
 
-	created := card.CreatedAt.Format("02 Jan 2006")
-	updated := card.UpdatedAt.Format("02 Jan 2006")
+	created := relativeTime(card.CreatedAt)
+	updated := relativeTime(card.UpdatedAt)
 	rows = append(rows, "")
 	meta := helpStyle.Render(fmt.Sprintf("Created: %s   Updated: %s", created, updated))
 	rows = append(rows,
@@ -553,8 +574,8 @@ func (a *App) viewCard() string {
 		))
 
 	if a.card.card != nil {
-		created := a.card.card.CreatedAt.Format("02 Jan 2006")
-		updated := a.card.card.UpdatedAt.Format("02 Jan 2006")
+		created := relativeTime(a.card.card.CreatedAt)
+		updated := relativeTime(a.card.card.UpdatedAt)
 		rows = append(rows, "")
 		meta := helpStyle.Render(fmt.Sprintf("Created: %s   Updated: %s", created, updated))
 		rows = append(rows,
