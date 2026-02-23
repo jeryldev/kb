@@ -23,6 +23,9 @@ var rootCmd = &cobra.Command{
 		if cmd.Name() == "help" {
 			return nil
 		}
+		if db != nil {
+			return nil
+		}
 		var err error
 		db, err = store.Open()
 		if err != nil {
@@ -47,6 +50,10 @@ var rootCmd = &cobra.Command{
 
 func Execute() error {
 	return rootCmd.Execute()
+}
+
+func init() {
+	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
 }
 
 func detectBoard() string {

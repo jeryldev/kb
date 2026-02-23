@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"text/tabwriter"
 
@@ -26,7 +25,7 @@ var cardCmd = &cobra.Command{
 		}
 
 		if len(cards) == 0 {
-			fmt.Printf("No cards on board %q. Add one with: kb card add \"title\"\n", board.Name)
+			fmt.Fprintf(cmd.OutOrStdout(), "No cards on board %q. Add one with: kb card add \"title\"\n", board.Name)
 			return nil
 		}
 
@@ -39,7 +38,15 @@ var cardCmd = &cobra.Command{
 			colNames[col.ID] = col.Name
 		}
 
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		if jsonOutput {
+			out := make([]cardJSON, len(cards))
+			for i, c := range cards {
+				out[i] = toCardJSON(c, colNames[c.ColumnID])
+			}
+			return printJSON(out)
+		}
+
+		w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "ID\tCOLUMN\tTITLE\tPRIORITY\tLABELS")
 		for _, c := range cards {
 			colName := colNames[c.ColumnID]
@@ -75,7 +82,7 @@ var cardAddCmd = &cobra.Command{
 		if colName != "" {
 			found := false
 			for _, col := range columns {
-				if col.Name == colName {
+				if strings.EqualFold(col.Name, colName) {
 					targetCol = col
 					found = true
 					break
@@ -95,7 +102,97 @@ var cardAddCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Created card %q in %s (id: %s)\n", card.Title, targetCol.Name, card.ID[:8])
+
+		needsUpdate := false
+		if cmd.Flags().Changed("description") {
+			card.Description, _ = cmd.Flags().GetString("description")
+			needsUpdate = true
+		}
+		if cmd.Flags().Changed("labels") {
+			card.Labels, _ = cmd.Flags().GetString("labels")
+			needsUpdate = true
+		}
+		if cmd.Flags().Changed("external-id") {
+			card.ExternalID, _ = cmd.Flags().GetString("external-id")
+			needsUpdate = true
+		}
+
+		if needsUpdate {
+			if err := db.UpdateCard(card); err != nil {
+				return err
+			}
+		}
+
+		if jsonOutput {
+			return printJSON(toCardJSON(card, targetCol.Name))
+		}
+
+		fmt.Fprintf(cmd.OutOrStdout(), "Created card %q in %s (id: %s)\n", card.Title, targetCol.Name, card.ID[:8])
+		return nil
+	},
+}
+
+var cardEditCmd = &cobra.Command{
+	Use:   "edit <id>",
+	Short: "Edit a card's fields",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		board, err := resolveBoard()
+		if err != nil {
+			return err
+		}
+
+		cardID, err := resolveCardID(board.ID, args[0])
+		if err != nil {
+			return err
+		}
+
+		card, err := db.GetCard(cardID)
+		if err != nil {
+			return err
+		}
+
+		if cmd.Flags().Changed("title") {
+			card.Title, _ = cmd.Flags().GetString("title")
+		}
+		if cmd.Flags().Changed("description") {
+			card.Description, _ = cmd.Flags().GetString("description")
+		}
+		if cmd.Flags().Changed("labels") {
+			card.Labels, _ = cmd.Flags().GetString("labels")
+		}
+		if cmd.Flags().Changed("priority") {
+			pStr, _ := cmd.Flags().GetString("priority")
+			p, err := model.ParsePriority(pStr)
+			if err != nil {
+				return err
+			}
+			card.Priority = p
+		}
+		if cmd.Flags().Changed("external-id") {
+			card.ExternalID, _ = cmd.Flags().GetString("external-id")
+		}
+
+		if err := db.UpdateCard(card); err != nil {
+			return err
+		}
+
+		if jsonOutput {
+			columns, err := db.ListColumns(board.ID)
+			if err != nil {
+				return err
+			}
+			colName := card.ColumnID
+			for _, col := range columns {
+				if col.ID == card.ColumnID {
+					colName = col.Name
+					break
+				}
+			}
+			return printJSON(toCardJSON(card, colName))
+		}
+
+		fmt.Fprintf(cmd.OutOrStdout(), "Updated card %q (id: %s)\n", card.Title, card.ID[:8])
 		return nil
 	},
 }
@@ -115,26 +212,24 @@ var cardMoveCmd = &cobra.Command{
 			return err
 		}
 
-		columns, err := db.ListColumns(board.ID)
+		targetCol, err := resolveColumnByName(board.ID, args[1])
 		if err != nil {
 			return err
-		}
-
-		var targetCol *model.Column
-		for _, col := range columns {
-			if col.Name == args[1] {
-				targetCol = col
-				break
-			}
-		}
-		if targetCol == nil {
-			return fmt.Errorf("column %q not found", args[1])
 		}
 
 		if err := db.MoveCard(cardID, targetCol.ID); err != nil {
 			return err
 		}
-		fmt.Printf("Moved card to %s\n", targetCol.Name)
+
+		if jsonOutput {
+			card, err := db.GetCard(cardID)
+			if err != nil {
+				return err
+			}
+			return printJSON(toCardJSON(card, targetCol.Name))
+		}
+
+		fmt.Fprintf(cmd.OutOrStdout(), "Moved card to %s\n", targetCol.Name)
 		return nil
 	},
 }
@@ -154,10 +249,78 @@ var cardArchiveCmd = &cobra.Command{
 			return err
 		}
 
+		card, err := db.GetCard(cardID)
+		if err != nil {
+			return err
+		}
+
+		columns, err := db.ListColumns(board.ID)
+		if err != nil {
+			return err
+		}
+		colName := card.ColumnID
+		for _, col := range columns {
+			if col.ID == card.ColumnID {
+				colName = col.Name
+				break
+			}
+		}
+
 		if err := db.ArchiveCard(cardID); err != nil {
 			return err
 		}
-		fmt.Println("Card archived")
+
+		if jsonOutput {
+			card.ArchivedAt = &card.UpdatedAt
+			return printJSON(toCardJSON(card, colName))
+		}
+
+		fmt.Fprintln(cmd.OutOrStdout(), "Card archived")
+		return nil
+	},
+}
+
+var cardDeleteCmd = &cobra.Command{
+	Use:   "delete <id>",
+	Short: "Delete a card",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		board, err := resolveBoard()
+		if err != nil {
+			return err
+		}
+
+		cardID, err := resolveCardID(board.ID, args[0])
+		if err != nil {
+			return err
+		}
+
+		card, err := db.GetCard(cardID)
+		if err != nil {
+			return err
+		}
+
+		columns, err := db.ListColumns(board.ID)
+		if err != nil {
+			return err
+		}
+		colName := card.ColumnID
+		for _, col := range columns {
+			if col.ID == card.ColumnID {
+				colName = col.Name
+				break
+			}
+		}
+
+		if err := db.DeleteCard(cardID); err != nil {
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(toCardJSON(card, colName))
+		}
+
+		fmt.Fprintf(cmd.OutOrStdout(), "Deleted card %q\n", card.Title)
 		return nil
 	},
 }
@@ -194,19 +357,24 @@ var cardShowCmd = &cobra.Command{
 			}
 		}
 
-		fmt.Printf("Title:       %s\n", card.Title)
-		fmt.Printf("Column:      %s\n", colName)
-		fmt.Printf("Priority:    %s\n", card.Priority)
-		fmt.Printf("Labels:      %s\n", card.Labels)
+		if jsonOutput {
+			return printJSON(toCardJSON(card, colName))
+		}
+
+		out := cmd.OutOrStdout()
+		fmt.Fprintf(out, "Title:       %s\n", card.Title)
+		fmt.Fprintf(out, "Column:      %s\n", colName)
+		fmt.Fprintf(out, "Priority:    %s\n", card.Priority)
+		fmt.Fprintf(out, "Labels:      %s\n", card.Labels)
 		if card.ExternalID != "" {
-			fmt.Printf("External ID: %s\n", card.ExternalID)
+			fmt.Fprintf(out, "External ID: %s\n", card.ExternalID)
 		}
 		if card.Description != "" {
-			fmt.Printf("\nDescription:\n%s\n", card.Description)
+			fmt.Fprintf(out, "\nDescription:\n%s\n", card.Description)
 		}
-		fmt.Printf("\nCreated: %s   Updated: %s\n",
+		fmt.Fprintf(out, "\nCreated: %s   Updated: %s\n",
 			card.CreatedAt.Format("02 Jan 2006"), card.UpdatedAt.Format("02 Jan 2006"))
-		fmt.Printf("ID: %s\n", card.ID)
+		fmt.Fprintf(out, "ID: %s\n", card.ID)
 		return nil
 	},
 }
@@ -260,10 +428,21 @@ func truncateStr(s string, max int) string {
 func init() {
 	cardAddCmd.Flags().StringP("column", "c", "", "Target column (default: first column)")
 	cardAddCmd.Flags().StringP("priority", "p", "medium", "Priority (low, medium, high, urgent)")
+	cardAddCmd.Flags().StringP("description", "d", "", "Card description")
+	cardAddCmd.Flags().StringP("labels", "l", "", "Comma-separated labels")
+	cardAddCmd.Flags().StringP("external-id", "e", "", "External system ID")
+
+	cardEditCmd.Flags().StringP("title", "t", "", "New title")
+	cardEditCmd.Flags().StringP("description", "d", "", "New description")
+	cardEditCmd.Flags().StringP("labels", "l", "", "New labels (comma-separated)")
+	cardEditCmd.Flags().StringP("priority", "p", "", "New priority (low, medium, high, urgent)")
+	cardEditCmd.Flags().StringP("external-id", "e", "", "New external ID")
 
 	cardCmd.AddCommand(cardAddCmd)
+	cardCmd.AddCommand(cardEditCmd)
 	cardCmd.AddCommand(cardMoveCmd)
 	cardCmd.AddCommand(cardArchiveCmd)
+	cardCmd.AddCommand(cardDeleteCmd)
 	cardCmd.AddCommand(cardShowCmd)
 	rootCmd.AddCommand(cardCmd)
 }

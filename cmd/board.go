@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -18,14 +17,22 @@ var boardCmd = &cobra.Command{
 			return err
 		}
 		if len(boards) == 0 {
-			fmt.Println("No boards found. Create one with: kb board create <name>")
+			fmt.Fprintln(cmd.OutOrStdout(), "No boards found. Create one with: kb board create <name>")
 			return nil
 		}
 
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "NAME\tDESCRIPTION\tCREATED")
+		if jsonOutput {
+			out := make([]boardJSON, len(boards))
+			for i, b := range boards {
+				out[i] = toBoardJSON(b)
+			}
+			return printJSON(out)
+		}
+
+		w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "ID\tNAME\tDESCRIPTION\tCREATED")
 		for _, b := range boards {
-			fmt.Fprintf(w, "%s\t%s\t%s\n", b.Name, b.Description, b.CreatedAt.Format("02 Jan 2006"))
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", b.ID[:8], b.Name, b.Description, b.CreatedAt.Format("02 Jan 2006"))
 		}
 		return w.Flush()
 	},
@@ -41,7 +48,12 @@ var boardCreateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Created board %q (id: %s)\n", board.Name, board.ID)
+
+		if jsonOutput {
+			return printJSON(toBoardJSON(board))
+		}
+
+		fmt.Fprintf(cmd.OutOrStdout(), "Created board %q (id: %s)\n", board.Name, board.ID[:8])
 		return nil
 	},
 }
@@ -60,20 +72,26 @@ var boardDeleteCmd = &cobra.Command{
 		}
 
 		force, _ := cmd.Flags().GetBool("force")
-		if !force {
-			fmt.Printf("Delete board %q and all its cards? This cannot be undone. [y/N] ", board.Name)
+		if !force && !jsonOutput {
+			fmt.Fprintf(cmd.OutOrStdout(), "Delete board %q and all its cards? This cannot be undone. [y/N] ", board.Name)
 			var confirm string
 			fmt.Scanln(&confirm)
 			if confirm != "y" && confirm != "Y" {
-				fmt.Println("Cancelled.")
+				fmt.Fprintln(cmd.OutOrStdout(), "Cancelled.")
 				return nil
 			}
 		}
 
+		out := toBoardJSON(board)
 		if err := db.DeleteBoard(board.ID); err != nil {
 			return err
 		}
-		fmt.Printf("Deleted board %q\n", board.Name)
+
+		if jsonOutput {
+			return printJSON(out)
+		}
+
+		fmt.Fprintf(cmd.OutOrStdout(), "Deleted board %q\n", board.Name)
 		return nil
 	},
 }
