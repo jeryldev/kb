@@ -25,6 +25,7 @@ brews:
     repository:
       owner: jeryldev
       name: homebrew-tap
+    skip_upload: true
     homepage: "https://github.com/jeryldev/kb"
     description: "Terminal Kanban board for personal project management"
     license: "MIT"
