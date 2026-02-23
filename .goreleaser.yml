@@ -21,7 +21,8 @@ archives:
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
 
 brews:
-  - repository:
+  - directory: Formula
+    repository:
       owner: jeryldev
       name: homebrew-tap
     homepage: "https://github.com/jeryldev/kb"
