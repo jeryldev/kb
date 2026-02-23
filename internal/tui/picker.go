@@ -18,6 +18,9 @@ type pickerModel struct {
 	input       string
 	err         error
 	autoSelect  bool
+	filter      string
+	filterInput string
+	filtering   bool
 }
 
 type boardsLoadedMsg struct {
@@ -88,13 +91,19 @@ func (a *App) updatePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a.updatePickerCreating(msg)
 		}
 
+		if a.picker.filtering {
+			return a.updatePickerFiltering(msg)
+		}
+
 		if a.picker.confirming != "" {
 			return a.updatePickerConfirming(msg)
 		}
 
+		visible := a.filteredBoards()
+
 		switch msg.String() {
 		case "j", "down":
-			if a.picker.cursor < len(a.picker.boards)-1 {
+			if a.picker.cursor < len(visible)-1 {
 				a.picker.cursor++
 			}
 		case "k", "up":
@@ -102,8 +111,8 @@ func (a *App) updatePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.picker.cursor--
 			}
 		case "enter":
-			if len(a.picker.boards) > 0 {
-				board := a.picker.boards[a.picker.cursor]
+			if len(visible) > 0 && a.picker.cursor < len(visible) {
+				board := visible[a.picker.cursor]
 				return a, a.switchToBoard(board)
 			}
 		case "n":
@@ -113,8 +122,16 @@ func (a *App) updatePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.picker.input = a.boardName
 			}
 		case "d", "D":
-			if len(a.picker.boards) > 0 {
+			if len(visible) > 0 && a.picker.cursor < len(visible) {
 				a.picker.confirming = "delete"
+			}
+		case "/":
+			a.picker.filtering = true
+			a.picker.filterInput = ""
+		case "esc":
+			if a.picker.filter != "" {
+				a.picker.filter = ""
+				a.picker.cursor = 0
 			}
 		case "q":
 			return a, tea.Quit
@@ -128,10 +145,11 @@ func (a *App) updatePickerConfirming(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
 		a.picker.confirming = ""
-		if a.picker.cursor >= len(a.picker.boards) {
+		visible := a.filteredBoards()
+		if a.picker.cursor >= len(visible) {
 			return a, nil
 		}
-		board := a.picker.boards[a.picker.cursor]
+		board := visible[a.picker.cursor]
 		return a, func() tea.Msg {
 			if err := a.db.DeleteBoard(board.ID); err != nil {
 				return errMsg{err}
@@ -174,12 +192,66 @@ func (a *App) updatePickerCreating(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
+func (a *App) updatePickerFiltering(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		a.picker.filter = strings.TrimSpace(a.picker.filterInput)
+		a.picker.filtering = false
+		a.picker.cursor = 0
+	case "esc":
+		a.picker.filtering = false
+		a.picker.filter = ""
+		a.picker.cursor = 0
+	case "backspace":
+		if len(a.picker.filterInput) > 0 {
+			a.picker.filterInput = a.picker.filterInput[:len(a.picker.filterInput)-1]
+		}
+	default:
+		if len(msg.String()) == 1 {
+			a.picker.filterInput += msg.String()
+		}
+	}
+	return a, nil
+}
+
+func (a *App) filteredBoards() []*model.Board {
+	if a.picker.filter == "" {
+		return a.picker.boards
+	}
+	filter := strings.ToLower(a.picker.filter)
+	var result []*model.Board
+	for _, b := range a.picker.boards {
+		if strings.Contains(strings.ToLower(b.Name), filter) ||
+			strings.Contains(strings.ToLower(b.Description), filter) {
+			result = append(result, b)
+		}
+	}
+	return result
+}
+
 func (a *App) switchToBoard(board *model.Board) tea.Cmd {
 	a.mode = modeBoard
 	a.board = boardModel{
 		board: board,
 	}
 	return a.loadBoard()
+}
+
+func (a *App) pickerLayout(w, h int, titleBar, filterBar, statusBar, content string) string {
+	sections := []string{titleBar, content}
+	if filterBar != "" {
+		sections = append(sections, filterBar)
+	}
+	sections = append(sections, statusBar)
+	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+}
+
+func (a *App) pickerContentHeight(h int, titleBar, filterBar, statusBar string) int {
+	contentHeight := h - lipgloss.Height(titleBar) - lipgloss.Height(statusBar) - 1
+	if filterBar != "" {
+		contentHeight--
+	}
+	return contentHeight
 }
 
 func (a *App) viewPicker() string {
@@ -193,7 +265,17 @@ func (a *App) viewPicker() string {
 	}
 
 	titleBar := titleBarStyle.Width(w).Render(" kb: Select Board ")
-	statusBar := statusBarStyle.Width(w).Render(" j/k: select   enter: open   n: new board   d: delete board   q: quit")
+	statusBar := statusBarStyle.Width(w).Render(" j/k: select   enter: open   n: new board   /: search   d: delete board   q: quit")
+
+	filterBar := ""
+	if a.picker.filtering {
+		filterBar = filterBarStyle.Render(fmt.Sprintf(" / %s", a.picker.filterInput)) + "█"
+	} else if a.picker.filter != "" {
+		filterBar = filterBarStyle.Render(fmt.Sprintf(" filter: %s", a.picker.filter)) +
+			helpStyle.Render("  (/ to change, esc clears)")
+	}
+
+	contentHeight := a.pickerContentHeight(h, titleBar, filterBar, statusBar)
 
 	var rows []string
 
@@ -210,23 +292,27 @@ func (a *App) viewPicker() string {
 		rows = append(rows, helpStyle.Render("  enter: create   esc: cancel"))
 
 		dialog := dialogBoxStyle.Width(50).Render(lipgloss.JoinVertical(lipgloss.Left, rows...))
-		contentHeight := h - lipgloss.Height(titleBar) - lipgloss.Height(statusBar) - 1
 		content := lipgloss.Place(w, contentHeight, lipgloss.Center, lipgloss.Center, dialog)
-		return lipgloss.JoinVertical(lipgloss.Left, titleBar, content, statusBar)
+		return a.pickerLayout(w, h, titleBar, filterBar, statusBar, content)
 	}
 
-	if len(a.picker.boards) == 0 {
-		rows = append(rows, helpStyle.Render("No boards found."))
-		rows = append(rows, "")
-		rows = append(rows, helpStyle.Render("Press n to create your first board."))
+	visible := a.filteredBoards()
+
+	if len(visible) == 0 {
+		if a.picker.filter != "" {
+			rows = append(rows, helpStyle.Render("No boards match filter."))
+		} else {
+			rows = append(rows, helpStyle.Render("No boards found."))
+			rows = append(rows, "")
+			rows = append(rows, helpStyle.Render("Press n to create your first board."))
+		}
 
 		dialog := dialogBoxStyle.Width(50).Render(lipgloss.JoinVertical(lipgloss.Left, rows...))
-		contentHeight := h - lipgloss.Height(titleBar) - lipgloss.Height(statusBar) - 1
 		content := lipgloss.Place(w, contentHeight, lipgloss.Center, lipgloss.Center, dialog)
-		return lipgloss.JoinVertical(lipgloss.Left, titleBar, content, statusBar)
+		return a.pickerLayout(w, h, titleBar, filterBar, statusBar, content)
 	}
 
-	for i, board := range a.picker.boards {
+	for i, board := range visible {
 		cursor := "  "
 		style := formValueStyle
 		if i == a.picker.cursor {
@@ -240,11 +326,9 @@ func (a *App) viewPicker() string {
 		rows = append(rows, line)
 	}
 
-	contentHeight := h - lipgloss.Height(titleBar) - lipgloss.Height(statusBar) - 1
-
 	var content string
-	if a.picker.confirming != "" && a.picker.cursor < len(a.picker.boards) {
-		board := a.picker.boards[a.picker.cursor]
+	if a.picker.confirming != "" && a.picker.cursor < len(visible) {
+		board := visible[a.picker.cursor]
 		prompt := fmt.Sprintf("Delete board %q?", board.Name)
 		content = renderCenteredConfirm(w, contentHeight, prompt)
 	} else {
@@ -252,5 +336,5 @@ func (a *App) viewPicker() string {
 		content = lipgloss.Place(w, contentHeight, lipgloss.Center, lipgloss.Center, dialog)
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, titleBar, content, statusBar)
+	return a.pickerLayout(w, h, titleBar, filterBar, statusBar, content)
 }

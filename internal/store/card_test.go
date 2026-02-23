@@ -339,3 +339,148 @@ func TestListBoardCardsExcludesArchivedAndDeleted(t *testing.T) {
 		t.Errorf("ListBoardCards should exclude archived/deleted: got %d, want 1", len(cards))
 	}
 }
+
+func TestListBoardCardsFilteredByPriority(t *testing.T) {
+	db := testDB(t)
+	board, _ := createTestBoardWithColumn(t, db)
+	columns, _ := db.ListColumns(board.ID)
+
+	db.CreateCard(columns[0].ID, "Low task", model.PriorityLow)
+	db.CreateCard(columns[0].ID, "High task", model.PriorityHigh)
+	db.CreateCard(columns[1].ID, "Another high", model.PriorityHigh)
+
+	cards, err := db.ListBoardCardsFiltered(board.ID, CardFilter{Priority: "high"})
+	if err != nil {
+		t.Fatalf("ListBoardCardsFiltered failed: %v", err)
+	}
+	if len(cards) != 2 {
+		t.Fatalf("got %d cards, want 2", len(cards))
+	}
+	for _, c := range cards {
+		if c.Priority != model.PriorityHigh {
+			t.Errorf("card %q has priority %q, want high", c.Title, c.Priority)
+		}
+	}
+}
+
+func TestListBoardCardsFilteredByColumn(t *testing.T) {
+	db := testDB(t)
+	board, _ := createTestBoardWithColumn(t, db)
+	columns, _ := db.ListColumns(board.ID)
+
+	db.CreateCard(columns[0].ID, "Backlog card", model.PriorityMedium)
+	db.CreateCard(columns[1].ID, "Todo card", model.PriorityMedium)
+
+	cards, err := db.ListBoardCardsFiltered(board.ID, CardFilter{Column: "todo"})
+	if err != nil {
+		t.Fatalf("ListBoardCardsFiltered failed: %v", err)
+	}
+	if len(cards) != 1 {
+		t.Fatalf("got %d cards, want 1", len(cards))
+	}
+	if cards[0].Title != "Todo card" {
+		t.Errorf("card title = %q, want %q", cards[0].Title, "Todo card")
+	}
+}
+
+func TestListBoardCardsFilteredBySearch(t *testing.T) {
+	db := testDB(t)
+	board, _ := createTestBoardWithColumn(t, db)
+	columns, _ := db.ListColumns(board.ID)
+
+	c1, _ := db.CreateCard(columns[0].ID, "Auth login fix", model.PriorityMedium)
+	_ = c1
+	c2, _ := db.CreateCard(columns[0].ID, "Dashboard update", model.PriorityMedium)
+	c2.Description = "Needs auth token refresh"
+	db.UpdateCard(c2)
+	db.CreateCard(columns[0].ID, "Unrelated task", model.PriorityMedium)
+
+	cards, err := db.ListBoardCardsFiltered(board.ID, CardFilter{Search: "auth"})
+	if err != nil {
+		t.Fatalf("ListBoardCardsFiltered failed: %v", err)
+	}
+	if len(cards) != 2 {
+		t.Fatalf("got %d cards, want 2 (title match + description match)", len(cards))
+	}
+}
+
+func TestListBoardCardsFilteredByLabel(t *testing.T) {
+	db := testDB(t)
+	board, _ := createTestBoardWithColumn(t, db)
+	columns, _ := db.ListColumns(board.ID)
+
+	c1, _ := db.CreateCard(columns[0].ID, "Bug card", model.PriorityMedium)
+	c1.Labels = "bug,frontend"
+	db.UpdateCard(c1)
+
+	c2, _ := db.CreateCard(columns[0].ID, "Debugging card", model.PriorityMedium)
+	c2.Labels = "debugging"
+	db.UpdateCard(c2)
+
+	db.CreateCard(columns[0].ID, "No labels", model.PriorityMedium)
+
+	cards, err := db.ListBoardCardsFiltered(board.ID, CardFilter{Label: "bug"})
+	if err != nil {
+		t.Fatalf("ListBoardCardsFiltered failed: %v", err)
+	}
+	if len(cards) != 1 {
+		t.Fatalf("got %d cards, want 1 (exact label match only)", len(cards))
+	}
+	if cards[0].Title != "Bug card" {
+		t.Errorf("card = %q, want %q", cards[0].Title, "Bug card")
+	}
+}
+
+func TestListBoardCardsFilteredCombined(t *testing.T) {
+	db := testDB(t)
+	board, _ := createTestBoardWithColumn(t, db)
+	columns, _ := db.ListColumns(board.ID)
+
+	db.CreateCard(columns[0].ID, "Backlog urgent", model.PriorityUrgent)
+	db.CreateCard(columns[1].ID, "Todo urgent", model.PriorityUrgent)
+	db.CreateCard(columns[1].ID, "Todo medium", model.PriorityMedium)
+
+	cards, err := db.ListBoardCardsFiltered(board.ID, CardFilter{Priority: "urgent", Column: "Todo"})
+	if err != nil {
+		t.Fatalf("ListBoardCardsFiltered failed: %v", err)
+	}
+	if len(cards) != 1 {
+		t.Fatalf("got %d cards, want 1 (urgent + Todo)", len(cards))
+	}
+	if cards[0].Title != "Todo urgent" {
+		t.Errorf("card = %q, want %q", cards[0].Title, "Todo urgent")
+	}
+}
+
+func TestListBoardCardsFilteredEmpty(t *testing.T) {
+	db := testDB(t)
+	board, _ := createTestBoardWithColumn(t, db)
+	columns, _ := db.ListColumns(board.ID)
+
+	db.CreateCard(columns[0].ID, "Card A", model.PriorityMedium)
+	db.CreateCard(columns[1].ID, "Card B", model.PriorityHigh)
+
+	cards, err := db.ListBoardCardsFiltered(board.ID, CardFilter{})
+	if err != nil {
+		t.Fatalf("ListBoardCardsFiltered failed: %v", err)
+	}
+	if len(cards) != 2 {
+		t.Fatalf("empty filter should return all cards: got %d, want 2", len(cards))
+	}
+}
+
+func TestListBoardCardsFilteredNoResults(t *testing.T) {
+	db := testDB(t)
+	board, _ := createTestBoardWithColumn(t, db)
+	columns, _ := db.ListColumns(board.ID)
+
+	db.CreateCard(columns[0].ID, "Card A", model.PriorityMedium)
+
+	cards, err := db.ListBoardCardsFiltered(board.ID, CardFilter{Priority: "urgent"})
+	if err != nil {
+		t.Fatalf("ListBoardCardsFiltered failed: %v", err)
+	}
+	if len(cards) != 0 {
+		t.Fatalf("expected empty result, got %d cards", len(cards))
+	}
+}

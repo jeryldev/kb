@@ -3,11 +3,23 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jeryldev/kb/internal/model"
 )
+
+type CardFilter struct {
+	Priority string
+	Column   string
+	Search   string
+	Label    string
+}
+
+func (f CardFilter) IsEmpty() bool {
+	return f.Priority == "" && f.Column == "" && f.Search == "" && f.Label == ""
+}
 
 func (d *DB) CreateCard(columnID, title string, priority model.Priority) (*model.Card, error) {
 	if err := model.ValidateCardTitle(title); err != nil {
@@ -230,4 +242,69 @@ func (d *DB) ListBoardCards(boardID string) ([]*model.Card, error) {
 		cards = append(cards, card)
 	}
 	return cards, rows.Err()
+}
+
+func (d *DB) ListBoardCardsFiltered(boardID string, filter CardFilter) ([]*model.Card, error) {
+	if filter.IsEmpty() {
+		return d.ListBoardCards(boardID)
+	}
+
+	query := `SELECT c.id, c.column_id, c.title, c.description, c.priority, c.position, c.labels,
+		        c.external_id, c.archived_at, c.deleted_at, c.created_at, c.updated_at
+		 FROM cards c
+		 JOIN columns col ON c.column_id = col.id
+		 WHERE col.board_id = ? AND c.deleted_at IS NULL AND c.archived_at IS NULL`
+	args := []interface{}{boardID}
+
+	if filter.Priority != "" {
+		query += " AND c.priority = ?"
+		args = append(args, filter.Priority)
+	}
+	if filter.Column != "" {
+		query += " AND LOWER(col.name) = LOWER(?)"
+		args = append(args, filter.Column)
+	}
+	if filter.Search != "" {
+		search := "%" + strings.ToLower(filter.Search) + "%"
+		query += " AND (LOWER(c.title) LIKE ? OR LOWER(c.description) LIKE ?)"
+		args = append(args, search, search)
+	}
+
+	query += " ORDER BY col.position, c.position"
+
+	rows, err := d.conn.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("listing filtered board cards: %w", err)
+	}
+	defer rows.Close()
+
+	var cards []*model.Card
+	for rows.Next() {
+		card := &model.Card{}
+		var priority string
+		if err := rows.Scan(
+			&card.ID, &card.ColumnID, &card.Title, &card.Description, &priority,
+			&card.Position, &card.Labels, &card.ExternalID,
+			&card.ArchivedAt, &card.DeletedAt, &card.CreatedAt, &card.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scanning card: %w", err)
+		}
+		card.Priority = model.Priority(priority)
+		cards = append(cards, card)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if filter.Label != "" {
+		var filtered []*model.Card
+		for _, card := range cards {
+			if card.HasLabel(filter.Label) {
+				filtered = append(filtered, card)
+			}
+		}
+		return filtered, nil
+	}
+
+	return cards, nil
 }

@@ -786,3 +786,123 @@ func TestRelativeTime(t *testing.T) {
 		})
 	}
 }
+
+// --- Filter tests ---
+
+func testCardsWithDescriptions() map[string][]*model.Card {
+	return map[string][]*model.Card{
+		"col-1": {
+			{ID: "c1", ColumnID: "col-1", Title: "Auth login fix", Description: "Fix OAuth flow", Priority: model.PriorityHigh, Labels: "bug,backend", Position: 0},
+			{ID: "c2", ColumnID: "col-1", Title: "Dashboard update", Description: "Add auth token display", Priority: model.PriorityMedium, Labels: "frontend", Position: 1},
+		},
+		"col-2": {
+			{ID: "c3", ColumnID: "col-2", Title: "Write tests", Description: "", Priority: model.PriorityLow, Position: 0},
+		},
+		"col-3": {},
+	}
+}
+
+func TestFilteredCardsMatchesDescription(t *testing.T) {
+	app := testApp(testColumns(), testCardsWithDescriptions())
+	app.board.filter = "OAuth"
+
+	cards := app.filteredCards("col-1")
+	if len(cards) != 1 {
+		t.Fatalf("expected 1 card matching description 'OAuth', got %d", len(cards))
+	}
+	if cards[0].ID != "c1" {
+		t.Errorf("expected c1, got %q", cards[0].ID)
+	}
+}
+
+func TestFilteredCardsMatchesTitle(t *testing.T) {
+	app := testApp(testColumns(), testCardsWithDescriptions())
+	app.board.filter = "Dashboard"
+
+	cards := app.filteredCards("col-1")
+	if len(cards) != 1 {
+		t.Fatalf("expected 1 card matching title 'Dashboard', got %d", len(cards))
+	}
+	if cards[0].ID != "c2" {
+		t.Errorf("expected c2, got %q", cards[0].ID)
+	}
+}
+
+func TestFilteredCardsMatchesPriority(t *testing.T) {
+	app := testApp(testColumns(), testCardsWithDescriptions())
+	app.board.filter = "high"
+
+	cards := app.filteredCards("col-1")
+	if len(cards) != 1 {
+		t.Fatalf("expected 1 card matching priority 'high', got %d", len(cards))
+	}
+	if cards[0].ID != "c1" {
+		t.Errorf("expected c1, got %q", cards[0].ID)
+	}
+}
+
+func TestFilteredCardsMatchesLabel(t *testing.T) {
+	app := testApp(testColumns(), testCardsWithDescriptions())
+	app.board.filter = "bug"
+
+	cards := app.filteredCards("col-1")
+	if len(cards) != 1 {
+		t.Fatalf("expected 1 card matching label 'bug', got %d", len(cards))
+	}
+	if cards[0].ID != "c1" {
+		t.Errorf("expected c1, got %q", cards[0].ID)
+	}
+}
+
+func TestFilteredCardsNoMatch(t *testing.T) {
+	app := testApp(testColumns(), testCardsWithDescriptions())
+	app.board.filter = "nonexistent"
+
+	cards := app.filteredCards("col-1")
+	if len(cards) != 0 {
+		t.Fatalf("expected 0 cards, got %d", len(cards))
+	}
+}
+
+func TestFilteredCardsEmptyFilter(t *testing.T) {
+	app := testApp(testColumns(), testCardsWithDescriptions())
+	app.board.filter = ""
+
+	cards := app.filteredCards("col-1")
+	if len(cards) != 2 {
+		t.Fatalf("expected all 2 cards with empty filter, got %d", len(cards))
+	}
+}
+
+func TestEscClearsFilter(t *testing.T) {
+	app := testApp(testColumns(), testCardsWithDescriptions())
+	app.board.filter = "auth"
+
+	app.updateBoard(tea.KeyMsg{Type: tea.KeyEscape})
+
+	if app.board.filter != "" {
+		t.Errorf("filter = %q, want empty after esc", app.board.filter)
+	}
+}
+
+func TestEscWithNoFilterDoesNothing(t *testing.T) {
+	app := testApp(testColumns(), testCardsWithDescriptions())
+	app.board.filter = ""
+	app.board.focusCard = 1
+
+	app.updateBoard(tea.KeyMsg{Type: tea.KeyEscape})
+
+	if app.board.focusCard != 1 {
+		t.Errorf("focusCard changed to %d, expected 1 (esc with no filter should be no-op)", app.board.focusCard)
+	}
+}
+
+func TestFilteredCardsSearchAcrossDescriptionAndTitle(t *testing.T) {
+	app := testApp(testColumns(), testCardsWithDescriptions())
+	app.board.filter = "auth"
+
+	cards := app.filteredCards("col-1")
+	if len(cards) != 2 {
+		t.Fatalf("expected 2 cards matching 'auth' (title c1 + description c2), got %d", len(cards))
+	}
+}

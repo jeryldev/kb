@@ -6,6 +6,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/jeryldev/kb/internal/model"
+	"github.com/jeryldev/kb/internal/store"
 	"github.com/spf13/cobra"
 )
 
@@ -19,13 +20,32 @@ var cardCmd = &cobra.Command{
 			return err
 		}
 
-		cards, err := db.ListBoardCards(board.ID)
+		var filter store.CardFilter
+		if cmd.Flags().Changed("priority") {
+			pStr, _ := cmd.Flags().GetString("priority")
+			if _, err := model.ParsePriority(pStr); err != nil {
+				return err
+			}
+			filter.Priority = pStr
+		}
+		filter.Label, _ = cmd.Flags().GetString("label")
+		filter.Column, _ = cmd.Flags().GetString("column")
+		filter.Search, _ = cmd.Flags().GetString("search")
+
+		cards, err := db.ListBoardCardsFiltered(board.ID, filter)
 		if err != nil {
 			return err
 		}
 
 		if len(cards) == 0 {
-			fmt.Fprintf(cmd.OutOrStdout(), "No cards on board %q. Add one with: kb card add \"title\"\n", board.Name)
+			if jsonOutput {
+				return printJSON([]cardJSON{})
+			}
+			if !filter.IsEmpty() {
+				fmt.Fprintln(cmd.OutOrStdout(), "No cards match the given filters.")
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "No cards on board %q. Add one with: kb card add \"title\"\n", board.Name)
+			}
 			return nil
 		}
 
@@ -426,6 +446,11 @@ func truncateStr(s string, max int) string {
 }
 
 func init() {
+	cardCmd.Flags().StringP("priority", "p", "", "Filter by priority (low, medium, high, urgent)")
+	cardCmd.Flags().StringP("label", "l", "", "Filter by label")
+	cardCmd.Flags().StringP("column", "c", "", "Filter by column name")
+	cardCmd.Flags().StringP("search", "s", "", "Search in title and description")
+
 	cardAddCmd.Flags().StringP("column", "c", "", "Target column (default: first column)")
 	cardAddCmd.Flags().StringP("priority", "p", "medium", "Priority (low, medium, high, urgent)")
 	cardAddCmd.Flags().StringP("description", "d", "", "Card description")

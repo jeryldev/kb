@@ -1138,3 +1138,204 @@ func TestColumnDeleteJSONSkipsConfirmation(t *testing.T) {
 		t.Errorf("expected name 'Review', got %q", col.Name)
 	}
 }
+
+// --- Card filter tests ---
+
+func setupFilteredCards(t *testing.T) {
+	t.Helper()
+	setupTestDB(t)
+	os.Setenv("KB_BOARD", "test-board")
+	t.Cleanup(func() { os.Unsetenv("KB_BOARD") })
+
+	createTestBoard(t, "test-board")
+	boardID := mustBoardID(t, "test-board")
+	columns, _ := db.ListColumns(boardID)
+
+	c1, _ := db.CreateCard(columns[0].ID, "Auth login fix", model.PriorityHigh)
+	c1.Labels = "bug,backend"
+	c1.Description = "Fix the OAuth flow"
+	db.UpdateCard(c1)
+
+	c2, _ := db.CreateCard(columns[1].ID, "Dashboard redesign", model.PriorityMedium)
+	c2.Labels = "frontend"
+	c2.Description = "Update layout with auth token display"
+	db.UpdateCard(c2)
+
+	c3, _ := db.CreateCard(columns[1].ID, "Urgent hotfix", model.PriorityUrgent)
+	c3.Labels = "bug"
+	db.UpdateCard(c3)
+
+	db.CreateCard(columns[2].ID, "Write tests", model.PriorityLow)
+}
+
+func TestCardsFilterByPriority(t *testing.T) {
+	setupFilteredCards(t)
+
+	out := executeCmd(t, "cards", "--json", "-p", "high")
+
+	var cards []cardJSON
+	if err := json.Unmarshal([]byte(out), &cards); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if len(cards) != 1 {
+		t.Fatalf("expected 1 card, got %d", len(cards))
+	}
+	if cards[0].Priority != "high" {
+		t.Errorf("expected priority 'high', got %q", cards[0].Priority)
+	}
+}
+
+func TestCardsFilterByLabel(t *testing.T) {
+	setupFilteredCards(t)
+
+	out := executeCmd(t, "cards", "--json", "-l", "bug")
+
+	var cards []cardJSON
+	if err := json.Unmarshal([]byte(out), &cards); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if len(cards) != 2 {
+		t.Fatalf("expected 2 cards with 'bug' label, got %d", len(cards))
+	}
+}
+
+func TestCardsFilterByColumn(t *testing.T) {
+	setupFilteredCards(t)
+
+	out := executeCmd(t, "cards", "--json", "-c", "Todo")
+
+	var cards []cardJSON
+	if err := json.Unmarshal([]byte(out), &cards); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if len(cards) != 2 {
+		t.Fatalf("expected 2 cards in Todo, got %d", len(cards))
+	}
+	for _, c := range cards {
+		if c.Column != "Todo" {
+			t.Errorf("expected column 'Todo', got %q", c.Column)
+		}
+	}
+}
+
+func TestCardsFilterBySearch(t *testing.T) {
+	setupFilteredCards(t)
+
+	out := executeCmd(t, "cards", "--json", "-s", "auth")
+
+	var cards []cardJSON
+	if err := json.Unmarshal([]byte(out), &cards); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if len(cards) != 2 {
+		t.Fatalf("expected 2 cards matching 'auth' (title + description), got %d", len(cards))
+	}
+}
+
+func TestCardsFilterCombined(t *testing.T) {
+	setupFilteredCards(t)
+
+	out := executeCmd(t, "cards", "--json", "-p", "urgent", "-c", "Todo")
+
+	var cards []cardJSON
+	if err := json.Unmarshal([]byte(out), &cards); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if len(cards) != 1 {
+		t.Fatalf("expected 1 card (urgent + Todo), got %d", len(cards))
+	}
+	if cards[0].Title != "Urgent hotfix" {
+		t.Errorf("expected 'Urgent hotfix', got %q", cards[0].Title)
+	}
+}
+
+func TestCardsFilterNoResults(t *testing.T) {
+	setupFilteredCards(t)
+
+	out := executeCmd(t, "cards", "--json", "-p", "urgent", "-c", "Backlog")
+
+	var cards []cardJSON
+	if err := json.Unmarshal([]byte(out), &cards); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if len(cards) != 0 {
+		t.Fatalf("expected 0 cards, got %d", len(cards))
+	}
+}
+
+func TestCardsFilterInvalidPriority(t *testing.T) {
+	setupFilteredCards(t)
+
+	_, err := executeCmdErr(t, "cards", "-p", "bogus")
+	if err == nil {
+		t.Error("expected error for invalid priority filter")
+	}
+}
+
+func TestCardsFilterHumanOutput(t *testing.T) {
+	setupFilteredCards(t)
+
+	out := executeCmd(t, "cards", "-p", "high")
+
+	if !strings.Contains(out, "Auth login fix") {
+		t.Errorf("expected 'Auth login fix' in output: %s", out)
+	}
+	if strings.Contains(out, "Dashboard redesign") {
+		t.Errorf("should not contain 'Dashboard redesign' in filtered output: %s", out)
+	}
+}
+
+func TestCardsFilterSearchDescription(t *testing.T) {
+	setupFilteredCards(t)
+
+	out := executeCmd(t, "cards", "--json", "-s", "OAuth")
+
+	var cards []cardJSON
+	if err := json.Unmarshal([]byte(out), &cards); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if len(cards) != 1 {
+		t.Fatalf("expected 1 card matching description 'OAuth', got %d", len(cards))
+	}
+	if cards[0].Title != "Auth login fix" {
+		t.Errorf("expected 'Auth login fix', got %q", cards[0].Title)
+	}
+}
+
+func TestCardsFilterLabelExact(t *testing.T) {
+	setupFilteredCards(t)
+
+	out := executeCmd(t, "cards", "--json", "-l", "bu")
+
+	var cards []cardJSON
+	if err := json.Unmarshal([]byte(out), &cards); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if len(cards) != 0 {
+		t.Fatalf("'bu' should not match 'bug' (exact label match), got %d cards", len(cards))
+	}
+}
+
+func TestCardsFilterCaseInsensitive(t *testing.T) {
+	setupFilteredCards(t)
+
+	out := executeCmd(t, "cards", "--json", "-c", "todo")
+
+	var cards []cardJSON
+	if err := json.Unmarshal([]byte(out), &cards); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if len(cards) != 2 {
+		t.Fatalf("expected 2 cards in 'todo' (case-insensitive), got %d", len(cards))
+	}
+
+	out2 := executeCmd(t, "cards", "--json", "-s", "AUTH")
+
+	var cards2 []cardJSON
+	if err := json.Unmarshal([]byte(out2), &cards2); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out2)
+	}
+	if len(cards2) != 2 {
+		t.Fatalf("expected 2 cards matching 'AUTH' (case-insensitive search), got %d", len(cards2))
+	}
+}

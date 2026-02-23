@@ -131,6 +131,12 @@ func (a *App) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if a.selectedCard() != nil {
 				a.board.confirming = "delete"
 			}
+		case "esc":
+			if a.board.filter != "" {
+				a.board.filter = ""
+				a.board.focusCard = 0
+				a.clampCardSelection()
+			}
 		case "/":
 			a.board.filtering = true
 			a.board.filterInput = ""
@@ -316,12 +322,29 @@ func (a *App) filteredCards(columnID string) []*model.Card {
 	var result []*model.Card
 	for _, card := range cards {
 		if strings.Contains(strings.ToLower(card.Title), filter) ||
+			strings.Contains(strings.ToLower(card.Description), filter) ||
 			strings.Contains(strings.ToLower(string(card.Priority)), filter) ||
 			card.HasLabel(a.board.filter) {
 			result = append(result, card)
 		}
 	}
 	return result
+}
+
+func (a *App) totalFilteredCardCount() int {
+	filter := strings.ToLower(a.board.filter)
+	count := 0
+	for _, cards := range a.board.cards {
+		for _, card := range cards {
+			if strings.Contains(strings.ToLower(card.Title), filter) ||
+				strings.Contains(strings.ToLower(card.Description), filter) ||
+				strings.Contains(strings.ToLower(string(card.Priority)), filter) ||
+				card.HasLabel(a.board.filter) {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 func (a *App) cardsForDisplay(columnID string) []*model.Card {
@@ -589,7 +612,8 @@ func (a *App) viewBoard() string {
 	if a.board.filtering {
 		filterBar = filterBarStyle.Render(fmt.Sprintf(" / %s", a.board.filterInput)) + "█"
 	} else if a.board.filter != "" {
-		filterBar = filterBarStyle.Render(fmt.Sprintf(" filter: %s", a.board.filter)) +
+		filteredCount := a.totalFilteredCardCount()
+		filterBar = filterBarStyle.Render(fmt.Sprintf(" filter: %s (%d cards)", a.board.filter, filteredCount)) +
 			helpStyle.Render("  (/ to change, esc clears)")
 	}
 
