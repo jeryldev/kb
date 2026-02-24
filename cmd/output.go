@@ -12,11 +12,12 @@ import (
 var jsonOutput bool
 
 type boardJSON struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	Description string  `json:"description"`
+	WorkspaceID *string `json:"workspace_id"`
+	CreatedAt   string  `json:"created_at"`
+	UpdatedAt   string  `json:"updated_at"`
 }
 
 type cardJSON struct {
@@ -48,6 +49,7 @@ func toBoardJSON(b *model.Board) boardJSON {
 		ID:          b.ID,
 		Name:        b.Name,
 		Description: b.Description,
+		WorkspaceID: b.WorkspaceID,
 		CreatedAt:   formatTime(b.CreatedAt),
 		UpdatedAt:   formatTime(b.UpdatedAt),
 	}
@@ -78,14 +80,15 @@ func toColumnJSON(col *model.Column, cardCount int) columnJSON {
 }
 
 type noteJSON struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Slug      string `json:"slug"`
-	Body      string `json:"body"`
-	Tags      string `json:"tags"`
-	Pinned    bool   `json:"pinned"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	ID          string  `json:"id"`
+	Title       string  `json:"title"`
+	Slug        string  `json:"slug"`
+	Body        string  `json:"body"`
+	Tags        string  `json:"tags"`
+	Pinned      bool    `json:"pinned"`
+	WorkspaceID *string `json:"workspace_id"`
+	CreatedAt   string  `json:"created_at"`
+	UpdatedAt   string  `json:"updated_at"`
 }
 
 type backlinkJSON struct {
@@ -96,14 +99,15 @@ type backlinkJSON struct {
 
 func toNoteJSON(n *model.Note) noteJSON {
 	return noteJSON{
-		ID:        n.ID,
-		Title:     n.Title,
-		Slug:      n.Slug,
-		Body:      n.Body,
-		Tags:      n.Tags,
-		Pinned:    n.Pinned,
-		CreatedAt: formatTime(n.CreatedAt),
-		UpdatedAt: formatTime(n.UpdatedAt),
+		ID:          n.ID,
+		Title:       n.Title,
+		Slug:        n.Slug,
+		Body:        n.Body,
+		Tags:        n.Tags,
+		Pinned:      n.Pinned,
+		WorkspaceID: n.WorkspaceID,
+		CreatedAt:   formatTime(n.CreatedAt),
+		UpdatedAt:   formatTime(n.UpdatedAt),
 	}
 }
 

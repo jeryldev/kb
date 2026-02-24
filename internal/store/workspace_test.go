@@ -308,3 +308,117 @@ func TestDeleteWorkspaceNotFound(t *testing.T) {
 		t.Errorf("error = %q, want 'not found'", err.Error())
 	}
 }
+
+func TestSetBoardWorkspace(t *testing.T) {
+	db := testDB(t)
+
+	board, err := db.CreateBoard("Test Board", "")
+	if err != nil {
+		t.Fatalf("CreateBoard: %v", err)
+	}
+	ws, err := db.CreateWorkspace("My Project", model.KindProject, "", "")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	if err := db.SetBoardWorkspace(board.ID, &ws.ID); err != nil {
+		t.Fatalf("SetBoardWorkspace: %v", err)
+	}
+
+	got, err := db.GetBoard(board.ID)
+	if err != nil {
+		t.Fatalf("GetBoard: %v", err)
+	}
+	if got.WorkspaceID == nil || *got.WorkspaceID != ws.ID {
+		t.Errorf("WorkspaceID = %v, want %q", got.WorkspaceID, ws.ID)
+	}
+}
+
+func TestSetBoardWorkspaceUnassign(t *testing.T) {
+	db := testDB(t)
+
+	board, err := db.CreateBoard("Test Board", "")
+	if err != nil {
+		t.Fatalf("CreateBoard: %v", err)
+	}
+	ws, err := db.CreateWorkspace("WS", model.KindProject, "", "")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	_ = db.SetBoardWorkspace(board.ID, &ws.ID)
+	if err := db.SetBoardWorkspace(board.ID, nil); err != nil {
+		t.Fatalf("SetBoardWorkspace(nil): %v", err)
+	}
+
+	got, _ := db.GetBoard(board.ID)
+	if got.WorkspaceID != nil {
+		t.Errorf("WorkspaceID = %v, want nil", got.WorkspaceID)
+	}
+}
+
+func TestListBoardsByWorkspace(t *testing.T) {
+	db := testDB(t)
+
+	ws, _ := db.CreateWorkspace("WS", model.KindProject, "", "")
+	b1, _ := db.CreateBoard("Board A", "")
+	b2, _ := db.CreateBoard("Board B", "")
+	_, _ = db.CreateBoard("Board C", "")
+
+	_ = db.SetBoardWorkspace(b1.ID, &ws.ID)
+	_ = db.SetBoardWorkspace(b2.ID, &ws.ID)
+
+	list, err := db.ListBoardsByWorkspace(ws.ID)
+	if err != nil {
+		t.Fatalf("ListBoardsByWorkspace: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("len = %d, want 2", len(list))
+	}
+}
+
+func TestSetNoteWorkspace(t *testing.T) {
+	db := testDB(t)
+
+	note, err := db.CreateNote("Test Note", "test-note", "")
+	if err != nil {
+		t.Fatalf("CreateNote: %v", err)
+	}
+	ws, err := db.CreateWorkspace("My Area", model.KindArea, "", "")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	if err := db.SetNoteWorkspace(note.ID, &ws.ID); err != nil {
+		t.Fatalf("SetNoteWorkspace: %v", err)
+	}
+
+	got, err := db.GetNote(note.ID)
+	if err != nil {
+		t.Fatalf("GetNote: %v", err)
+	}
+	if got.WorkspaceID == nil || *got.WorkspaceID != ws.ID {
+		t.Errorf("WorkspaceID = %v, want %q", got.WorkspaceID, ws.ID)
+	}
+}
+
+func TestListNotesByWorkspace(t *testing.T) {
+	db := testDB(t)
+
+	ws, _ := db.CreateWorkspace("WS", model.KindProject, "", "")
+	n1, _ := db.CreateNote("Note A", "note-a", "")
+	_, _ = db.CreateNote("Note B", "note-b", "")
+
+	_ = db.SetNoteWorkspace(n1.ID, &ws.ID)
+
+	list, err := db.ListNotesByWorkspace(ws.ID)
+	if err != nil {
+		t.Fatalf("ListNotesByWorkspace: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("len = %d, want 1", len(list))
+	}
+	if list[0].ID != n1.ID {
+		t.Errorf("ID = %q, want %q", list[0].ID, n1.ID)
+	}
+}

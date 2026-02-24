@@ -8,15 +8,16 @@ import (
 )
 
 type Note struct {
-	ID         string
-	Title      string
-	Slug       string
-	Body       string
-	Tags       string
-	Pinned     bool
-	ArchivedAt *time.Time
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	ID          string
+	Title       string
+	Slug        string
+	Body        string
+	Tags        string
+	Pinned      bool
+	WorkspaceID *string
+	ArchivedAt  *time.Time
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 func (n *Note) TagList() []string {

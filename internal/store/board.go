@@ -30,8 +30,8 @@ func (d *DB) CreateBoard(name, description string) (*model.Board, error) {
 	defer tx.Rollback()
 
 	_, err = tx.Exec(
-		"INSERT INTO boards (id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-		board.ID, board.Name, board.Description, board.CreatedAt, board.UpdatedAt,
+		"INSERT INTO boards (id, name, description, workspace_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+		board.ID, board.Name, board.Description, board.WorkspaceID, board.CreatedAt, board.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("inserting board: %w", err)
@@ -57,9 +57,9 @@ func (d *DB) CreateBoard(name, description string) (*model.Board, error) {
 func (d *DB) GetBoard(id string) (*model.Board, error) {
 	board := &model.Board{}
 	err := d.conn.QueryRow(
-		"SELECT id, name, description, created_at, updated_at FROM boards WHERE id = ?",
+		"SELECT id, name, description, workspace_id, created_at, updated_at FROM boards WHERE id = ?",
 		id,
-	).Scan(&board.ID, &board.Name, &board.Description, &board.CreatedAt, &board.UpdatedAt)
+	).Scan(&board.ID, &board.Name, &board.Description, &board.WorkspaceID, &board.CreatedAt, &board.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("board not found")
 	}
@@ -72,9 +72,9 @@ func (d *DB) GetBoard(id string) (*model.Board, error) {
 func (d *DB) GetBoardByName(name string) (*model.Board, error) {
 	board := &model.Board{}
 	err := d.conn.QueryRow(
-		"SELECT id, name, description, created_at, updated_at FROM boards WHERE name = ?",
+		"SELECT id, name, description, workspace_id, created_at, updated_at FROM boards WHERE name = ?",
 		name,
-	).Scan(&board.ID, &board.Name, &board.Description, &board.CreatedAt, &board.UpdatedAt)
+	).Scan(&board.ID, &board.Name, &board.Description, &board.WorkspaceID, &board.CreatedAt, &board.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -86,17 +86,50 @@ func (d *DB) GetBoardByName(name string) (*model.Board, error) {
 
 func (d *DB) ListBoards() ([]*model.Board, error) {
 	rows, err := d.conn.Query(
-		"SELECT id, name, description, created_at, updated_at FROM boards ORDER BY name",
+		"SELECT id, name, description, workspace_id, created_at, updated_at FROM boards ORDER BY name",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing boards: %w", err)
 	}
 	defer rows.Close()
+	return scanBoards(rows)
+}
 
+func (d *DB) ListBoardsByWorkspace(workspaceID string) ([]*model.Board, error) {
+	rows, err := d.conn.Query(
+		"SELECT id, name, description, workspace_id, created_at, updated_at FROM boards WHERE workspace_id = ? ORDER BY name",
+		workspaceID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing boards by workspace: %w", err)
+	}
+	defer rows.Close()
+	return scanBoards(rows)
+}
+
+func (d *DB) SetBoardWorkspace(boardID string, workspaceID *string) error {
+	result, err := d.conn.Exec(
+		"UPDATE boards SET workspace_id = ?, updated_at = ? WHERE id = ?",
+		workspaceID, time.Now().UTC(), boardID,
+	)
+	if err != nil {
+		return fmt.Errorf("setting board workspace: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking rows affected: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("board not found")
+	}
+	return nil
+}
+
+func scanBoards(rows *sql.Rows) ([]*model.Board, error) {
 	var boards []*model.Board
 	for rows.Next() {
 		board := &model.Board{}
-		if err := rows.Scan(&board.ID, &board.Name, &board.Description, &board.CreatedAt, &board.UpdatedAt); err != nil {
+		if err := rows.Scan(&board.ID, &board.Name, &board.Description, &board.WorkspaceID, &board.CreatedAt, &board.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scanning board: %w", err)
 		}
 		boards = append(boards, board)
