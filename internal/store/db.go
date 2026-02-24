@@ -83,6 +83,11 @@ func (d *DB) migrate() error {
 			return err
 		}
 	}
+	if version < 3 {
+		if err := d.migrate003(); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
@@ -184,6 +189,41 @@ func (d *DB) migrate002() error {
 	}
 	if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (2)"); err != nil {
 		return fmt.Errorf("recording migration 002: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+func (d *DB) migrate003() error {
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning migration transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	schema := `
+		CREATE TABLE IF NOT EXISTS workspaces (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			kind TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			path TEXT NOT NULL DEFAULT '',
+			position INTEGER NOT NULL DEFAULT 0,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+
+		ALTER TABLE boards ADD COLUMN workspace_id TEXT REFERENCES workspaces(id);
+		ALTER TABLE notes ADD COLUMN workspace_id TEXT REFERENCES workspaces(id);
+
+		CREATE INDEX IF NOT EXISTS idx_boards_workspace_id ON boards(workspace_id);
+		CREATE INDEX IF NOT EXISTS idx_notes_workspace_id ON notes(workspace_id);
+	`
+	if _, err := tx.Exec(schema); err != nil {
+		return fmt.Errorf("applying migration 003: %w", err)
+	}
+	if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (3)"); err != nil {
+		return fmt.Errorf("recording migration 003: %w", err)
 	}
 
 	return tx.Commit()
