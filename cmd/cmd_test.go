@@ -2241,3 +2241,180 @@ func TestPublishWithTargetFlag(t *testing.T) {
 		t.Errorf("should not have file in site-1")
 	}
 }
+
+// --- Graph tests ---
+
+func TestGraphSummary(t *testing.T) {
+	setupTestDB(t)
+	os.Setenv("KB_BOARD", "test-board")
+	defer os.Unsetenv("KB_BOARD")
+
+	executeCmd(t, "note", "create", "Alpha", "--body", "Links to [[beta]]")
+	executeCmd(t, "note", "create", "Beta", "--body", "plain note")
+
+	out := executeCmd(t, "graph")
+
+	if !strings.Contains(out, "Knowledge Graph") {
+		t.Error("missing header")
+	}
+	if !strings.Contains(out, "Nodes:") {
+		t.Error("missing nodes count")
+	}
+	if !strings.Contains(out, "Edges:") {
+		t.Error("missing edges count")
+	}
+	if !strings.Contains(out, "Orphans:") {
+		t.Error("missing orphans count")
+	}
+}
+
+func TestGraphJSON(t *testing.T) {
+	setupTestDB(t)
+	os.Setenv("KB_BOARD", "test-board")
+	defer os.Unsetenv("KB_BOARD")
+
+	executeCmd(t, "note", "create", "Note A")
+	executeCmd(t, "note", "create", "Note B")
+	executeCmd(t, "note", "edit", "note-a", "--body", "See [[note-b]]")
+
+	out := executeCmd(t, "graph", "--json")
+
+	var data struct {
+		Nodes []struct {
+			ID          string `json:"id"`
+			Label       string `json:"label"`
+			Connections int    `json:"connections"`
+		} `json:"nodes"`
+		Edges []struct {
+			Source string `json:"source"`
+			Target string `json:"target"`
+		} `json:"edges"`
+	}
+	if err := json.Unmarshal([]byte(out), &data); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+
+	if len(data.Nodes) != 2 {
+		t.Errorf("nodes = %d, want 2", len(data.Nodes))
+	}
+	if len(data.Edges) != 1 {
+		t.Errorf("edges = %d, want 1", len(data.Edges))
+	}
+}
+
+func TestGraphJSONEmpty(t *testing.T) {
+	setupTestDB(t)
+	os.Setenv("KB_BOARD", "test-board")
+	defer os.Unsetenv("KB_BOARD")
+
+	out := executeCmd(t, "graph", "--json")
+
+	var data struct {
+		Nodes []any `json:"nodes"`
+		Edges []any `json:"edges"`
+	}
+	if err := json.Unmarshal([]byte(out), &data); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+
+	if len(data.Nodes) != 0 {
+		t.Errorf("nodes = %d, want 0", len(data.Nodes))
+	}
+	if len(data.Edges) != 0 {
+		t.Errorf("edges = %d, want 0", len(data.Edges))
+	}
+}
+
+func TestGraphWorkspaceScoped(t *testing.T) {
+	setupTestDB(t)
+	os.Setenv("KB_BOARD", "test-board")
+	defer os.Unsetenv("KB_BOARD")
+
+	executeCmd(t, "workspace", "create", "graph-ws", "--kind", "project")
+	executeCmd(t, "note", "create", "WS Note 1")
+	executeCmd(t, "note", "create", "WS Note 2")
+	executeCmd(t, "note", "create", "Outside Note")
+	executeCmd(t, "note", "edit", "ws-note-1", "--body", "See [[ws-note-2]]")
+
+	executeCmd(t, "note", "move", "ws-note-1", "--workspace", "graph-ws")
+	executeCmd(t, "note", "move", "ws-note-2", "--workspace", "graph-ws")
+
+	out := executeCmd(t, "graph", "--workspace", "graph-ws", "--json")
+
+	var data struct {
+		Nodes []struct {
+			ID string `json:"id"`
+		} `json:"nodes"`
+		Edges []struct {
+			Source string `json:"source"`
+		} `json:"edges"`
+	}
+	if err := json.Unmarshal([]byte(out), &data); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+
+	if len(data.Nodes) != 2 {
+		t.Errorf("nodes = %d, want 2 (workspace scoped)", len(data.Nodes))
+	}
+	if len(data.Edges) != 1 {
+		t.Errorf("edges = %d, want 1", len(data.Edges))
+	}
+}
+
+func TestGraphSummaryWithWorkspace(t *testing.T) {
+	setupTestDB(t)
+	os.Setenv("KB_BOARD", "test-board")
+	defer os.Unsetenv("KB_BOARD")
+
+	executeCmd(t, "workspace", "create", "viz-ws", "--kind", "area")
+
+	out := executeCmd(t, "graph", "--workspace", "viz-ws")
+
+	if !strings.Contains(out, "Workspace: viz-ws") {
+		t.Errorf("expected workspace label, got: %s", out)
+	}
+}
+
+func TestGraphOrphanCount(t *testing.T) {
+	setupTestDB(t)
+	os.Setenv("KB_BOARD", "test-board")
+	defer os.Unsetenv("KB_BOARD")
+
+	executeCmd(t, "note", "create", "Connected A")
+	executeCmd(t, "note", "create", "Connected B")
+	executeCmd(t, "note", "create", "Orphan Note")
+	executeCmd(t, "note", "edit", "connected-a", "--body", "See [[connected-b]]")
+
+	out := executeCmd(t, "graph", "--json")
+
+	var data struct {
+		Nodes []struct {
+			ID          string `json:"id"`
+			Connections int    `json:"connections"`
+		} `json:"nodes"`
+	}
+	if err := json.Unmarshal([]byte(out), &data); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+
+	orphans := 0
+	for _, n := range data.Nodes {
+		if n.Connections == 0 {
+			orphans++
+		}
+	}
+	if orphans != 1 {
+		t.Errorf("orphans = %d, want 1", orphans)
+	}
+}
+
+func TestGraphWorkspaceNotFound(t *testing.T) {
+	setupTestDB(t)
+	os.Setenv("KB_BOARD", "test-board")
+	defer os.Unsetenv("KB_BOARD")
+
+	_, err := executeCmdErr(t, "graph", "--workspace", "nonexistent")
+	if err == nil {
+		t.Error("expected error for nonexistent workspace")
+	}
+}
