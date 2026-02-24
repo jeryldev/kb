@@ -74,6 +74,18 @@ func (d *DB) GetBacklinks(targetType, targetID string) ([]*model.Link, error) {
 	return scanLinks(rows)
 }
 
+func (d *DB) ListAllLinks() ([]*model.Link, error) {
+	rows, err := d.conn.Query(
+		`SELECT id, source_type, source_id, target_type, target_id, context, created_at
+		 FROM links ORDER BY created_at`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing all links: %w", err)
+	}
+	defer rows.Close()
+	return scanLinks(rows)
+}
+
 func scanLinks(rows *sql.Rows) ([]*model.Link, error) {
 	var links []*model.Link
 	for rows.Next() {
