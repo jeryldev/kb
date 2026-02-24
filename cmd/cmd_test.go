@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1902,5 +1903,341 @@ func TestWorkspaceAlias(t *testing.T) {
 	}
 	if len(workspaces) != 1 {
 		t.Fatalf("expected 1 workspace via alias, got %d", len(workspaces))
+	}
+}
+
+// --- Publish tests ---
+
+func TestPublishSetupJSON(t *testing.T) {
+	setupTestDB(t)
+
+	tmpDir := t.TempDir()
+
+	out := executeCmd(t, "publish", "setup", "my-site",
+		"--engine", "jekyll",
+		"--path", tmpDir,
+		"--json")
+
+	var pt publishTargetJSON
+	if err := json.Unmarshal([]byte(out), &pt); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if pt.Name != "my-site" {
+		t.Errorf("name = %q, want 'my-site'", pt.Name)
+	}
+	if pt.Engine != "jekyll" {
+		t.Errorf("engine = %q, want 'jekyll'", pt.Engine)
+	}
+	if pt.BasePath != tmpDir {
+		t.Errorf("base_path = %q, want %q", pt.BasePath, tmpDir)
+	}
+	if pt.PostsDir != "_posts" {
+		t.Errorf("posts_dir = %q, want '_posts'", pt.PostsDir)
+	}
+}
+
+func TestPublishSetupHuman(t *testing.T) {
+	setupTestDB(t)
+
+	out := executeCmd(t, "publish", "setup", "blog",
+		"--engine", "jekyll",
+		"--path", t.TempDir())
+
+	if !strings.Contains(out, "Created publish target") {
+		t.Errorf("expected confirmation, got: %s", out)
+	}
+}
+
+func TestPublishSetupWithWorkspace(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "workspace", "create", "WS", "--kind", "project", "--json")
+
+	out := executeCmd(t, "publish", "setup", "blog",
+		"--engine", "jekyll",
+		"--path", t.TempDir(),
+		"--workspace", "WS",
+		"--json")
+
+	var pt publishTargetJSON
+	if err := json.Unmarshal([]byte(out), &pt); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if pt.WorkspaceID == nil {
+		t.Fatal("expected WorkspaceID to be set")
+	}
+}
+
+func TestPublishSetupMissingPath(t *testing.T) {
+	setupTestDB(t)
+
+	_, err := executeCmdErr(t, "publish", "setup", "blog", "--engine", "jekyll")
+	if err == nil {
+		t.Error("expected error for missing path")
+	}
+}
+
+func TestPublishSetupInvalidEngine(t *testing.T) {
+	setupTestDB(t)
+
+	_, err := executeCmdErr(t, "publish", "setup", "blog", "--engine", "hugo", "--path", "/tmp")
+	if err == nil {
+		t.Error("expected error for invalid engine")
+	}
+}
+
+func TestPublishListTargetsJSON(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "publish", "setup", "site-a", "--engine", "jekyll", "--path", t.TempDir(), "--json")
+	executeCmd(t, "publish", "setup", "site-b", "--engine", "jekyll", "--path", t.TempDir(), "--json")
+
+	out := executeCmd(t, "publish", "list", "--json")
+
+	var targets []publishTargetJSON
+	if err := json.Unmarshal([]byte(out), &targets); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if len(targets) != 2 {
+		t.Fatalf("expected 2 targets, got %d", len(targets))
+	}
+}
+
+func TestPublishListEmpty(t *testing.T) {
+	setupTestDB(t)
+
+	out := executeCmd(t, "publish", "list")
+
+	if !strings.Contains(out, "No publish targets") {
+		t.Errorf("expected empty message, got: %s", out)
+	}
+}
+
+func TestPublishDeleteJSON(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "publish", "setup", "to-delete", "--engine", "jekyll", "--path", t.TempDir(), "--json")
+
+	out := executeCmd(t, "publish", "delete", "to-delete", "--json")
+
+	var pt publishTargetJSON
+	if err := json.Unmarshal([]byte(out), &pt); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if pt.Name != "to-delete" {
+		t.Errorf("name = %q, want 'to-delete'", pt.Name)
+	}
+}
+
+func TestPublishNoteJSON(t *testing.T) {
+	setupTestDB(t)
+
+	tmpDir := t.TempDir()
+	executeCmd(t, "publish", "setup", "site", "--engine", "jekyll", "--path", tmpDir, "--json")
+	executeCmd(t, "notes", "create", "My Blog Post", "--body", "Hello world", "--tags", "go,blog", "--json")
+
+	out := executeCmd(t, "publish", "my-blog-post", "--json")
+
+	var pl publishLogJSON
+	if err := json.Unmarshal([]byte(out), &pl); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if pl.NoteSlug != "my-blog-post" {
+		t.Errorf("note_slug = %q, want 'my-blog-post'", pl.NoteSlug)
+	}
+	if !strings.Contains(pl.FilePath, "my-blog-post.md") {
+		t.Errorf("file_path = %q, want to contain 'my-blog-post.md'", pl.FilePath)
+	}
+
+	writtenPath := filepath.Join(tmpDir, pl.FilePath)
+	content, err := os.ReadFile(writtenPath)
+	if err != nil {
+		t.Fatalf("reading published file: %v", err)
+	}
+	if !strings.Contains(string(content), "Hello world") {
+		t.Errorf("published content missing body: %s", content)
+	}
+	if !strings.Contains(string(content), `title: "My Blog Post"`) {
+		t.Errorf("published content missing title front matter: %s", content)
+	}
+	if !strings.Contains(string(content), "tags: [go, blog]") {
+		t.Errorf("published content missing tags: %s", content)
+	}
+}
+
+func TestPublishNoteHuman(t *testing.T) {
+	setupTestDB(t)
+
+	tmpDir := t.TempDir()
+	executeCmd(t, "publish", "setup", "site", "--engine", "jekyll", "--path", tmpDir, "--json")
+	executeCmd(t, "notes", "create", "Human Post", "--body", "Content", "--json")
+
+	out := executeCmd(t, "publish", "human-post")
+
+	if !strings.Contains(out, "Published") || !strings.Contains(out, "Human Post") {
+		t.Errorf("expected publish confirmation, got: %s", out)
+	}
+}
+
+func TestPublishNoteDraft(t *testing.T) {
+	setupTestDB(t)
+
+	tmpDir := t.TempDir()
+	executeCmd(t, "publish", "setup", "site", "--engine", "jekyll", "--path", tmpDir, "--json")
+	executeCmd(t, "notes", "create", "Draft Post", "--body", "Draft content", "--json")
+
+	out := executeCmd(t, "publish", "draft-post", "--draft")
+
+	if !strings.Contains(out, "draft") {
+		t.Errorf("expected draft label, got: %s", out)
+	}
+
+	files, _ := filepath.Glob(filepath.Join(tmpDir, "_posts", "*.md"))
+	if len(files) != 1 {
+		t.Fatalf("expected 1 file, got %d", len(files))
+	}
+	content, _ := os.ReadFile(files[0])
+	if !strings.Contains(string(content), "published: false") {
+		t.Errorf("expected 'published: false' in draft: %s", content)
+	}
+}
+
+func TestPublishNoteDryRun(t *testing.T) {
+	setupTestDB(t)
+
+	tmpDir := t.TempDir()
+	executeCmd(t, "publish", "setup", "site", "--engine", "jekyll", "--path", tmpDir, "--json")
+	executeCmd(t, "notes", "create", "Dry Run Post", "--body", "Preview", "--json")
+
+	out := executeCmd(t, "publish", "dry-run-post", "--dry-run")
+
+	if !strings.Contains(out, "Would write to:") {
+		t.Errorf("expected dry run message, got: %s", out)
+	}
+	if !strings.Contains(out, "Preview") {
+		t.Errorf("expected body content in dry run, got: %s", out)
+	}
+
+	files, _ := filepath.Glob(filepath.Join(tmpDir, "_posts", "*.md"))
+	if len(files) != 0 {
+		t.Errorf("dry run should not write files, found %d", len(files))
+	}
+}
+
+func TestPublishNoteDryRunJSON(t *testing.T) {
+	setupTestDB(t)
+
+	tmpDir := t.TempDir()
+	executeCmd(t, "publish", "setup", "site", "--engine", "jekyll", "--path", tmpDir, "--json")
+	executeCmd(t, "notes", "create", "Dry JSON", "--body", "Preview content", "--json")
+
+	out := executeCmd(t, "publish", "dry-json", "--dry-run", "--json")
+
+	var result struct {
+		FilePath string `json:"file_path"`
+		Content  string `json:"content"`
+		Draft    bool   `json:"draft"`
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if !strings.Contains(result.Content, "Preview content") {
+		t.Errorf("expected body in content: %s", result.Content)
+	}
+	if result.Draft {
+		t.Error("expected draft=false for non-draft dry run")
+	}
+}
+
+func TestPublishListLogsJSON(t *testing.T) {
+	setupTestDB(t)
+
+	tmpDir := t.TempDir()
+	executeCmd(t, "publish", "setup", "site", "--engine", "jekyll", "--path", tmpDir, "--json")
+	executeCmd(t, "notes", "create", "Log Test", "--body", "content", "--json")
+	executeCmd(t, "publish", "log-test", "--json")
+
+	out := executeCmd(t, "publish", "list", "--target", "site", "--json")
+
+	var logs []publishLogJSON
+	if err := json.Unmarshal([]byte(out), &logs); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 log entry, got %d", len(logs))
+	}
+	if logs[0].NoteSlug != "log-test" {
+		t.Errorf("note_slug = %q, want 'log-test'", logs[0].NoteSlug)
+	}
+}
+
+func TestPublishNoteResolvesWikilinks(t *testing.T) {
+	setupTestDB(t)
+
+	tmpDir := t.TempDir()
+	executeCmd(t, "publish", "setup", "site", "--engine", "jekyll", "--path", tmpDir, "--json")
+
+	executeCmd(t, "notes", "create", "Referenced", "--body", "I am referenced", "--json")
+	executeCmd(t, "notes", "create", "Linker", "--body", "See [[referenced]] for info", "--json")
+
+	executeCmd(t, "publish", "referenced", "--json")
+	executeCmd(t, "publish", "linker", "--json")
+
+	files, _ := filepath.Glob(filepath.Join(tmpDir, "_posts", "*linker*"))
+	if len(files) != 1 {
+		t.Fatalf("expected 1 linker file, got %d", len(files))
+	}
+	content, _ := os.ReadFile(files[0])
+	if !strings.Contains(string(content), "[Referenced]") {
+		t.Errorf("expected resolved wikilink in content: %s", content)
+	}
+}
+
+func TestPublishNoteNotFound(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "publish", "setup", "site", "--engine", "jekyll", "--path", t.TempDir(), "--json")
+
+	_, err := executeCmdErr(t, "publish", "nonexistent-note")
+	if err == nil {
+		t.Error("expected error for nonexistent note")
+	}
+}
+
+func TestPublishNoTargets(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "notes", "create", "Orphan", "--json")
+
+	_, err := executeCmdErr(t, "publish", "orphan")
+	if err == nil {
+		t.Error("expected error when no publish targets configured")
+	}
+}
+
+func TestPublishWithTargetFlag(t *testing.T) {
+	setupTestDB(t)
+
+	tmpDir1 := t.TempDir()
+	tmpDir2 := t.TempDir()
+	executeCmd(t, "publish", "setup", "site-1", "--engine", "jekyll", "--path", tmpDir1, "--json")
+	executeCmd(t, "publish", "setup", "site-2", "--engine", "jekyll", "--path", tmpDir2, "--json")
+	executeCmd(t, "notes", "create", "Multi Target", "--body", "content", "--json")
+
+	out := executeCmd(t, "publish", "multi-target", "--target", "site-2", "--json")
+
+	var pl publishLogJSON
+	if err := json.Unmarshal([]byte(out), &pl); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+
+	files, _ := filepath.Glob(filepath.Join(tmpDir2, "_posts", "*multi-target*"))
+	if len(files) != 1 {
+		t.Fatalf("expected file in site-2, got %d", len(files))
+	}
+
+	files1, _ := filepath.Glob(filepath.Join(tmpDir1, "_posts", "*multi-target*"))
+	if len(files1) != 0 {
+		t.Errorf("should not have file in site-1")
 	}
 }

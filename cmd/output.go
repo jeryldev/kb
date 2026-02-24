@@ -135,6 +135,46 @@ func toNoteJSON(n *model.Note) noteJSON {
 	}
 }
 
+type publishTargetJSON struct {
+	ID          string  `json:"id"`
+	WorkspaceID *string `json:"workspace_id"`
+	Name        string  `json:"name"`
+	Engine      string  `json:"engine"`
+	BasePath    string  `json:"base_path"`
+	PostsDir    string  `json:"posts_dir"`
+	CreatedAt   string  `json:"created_at"`
+}
+
+func toPublishTargetJSON(pt *model.PublishTarget) publishTargetJSON {
+	return publishTargetJSON{
+		ID:          pt.ID,
+		WorkspaceID: pt.WorkspaceID,
+		Name:        pt.Name,
+		Engine:      string(pt.Engine),
+		BasePath:    pt.BasePath,
+		PostsDir:    pt.PostsDir,
+		CreatedAt:   formatTime(pt.CreatedAt),
+	}
+}
+
+type publishLogJSON struct {
+	ID          string `json:"id"`
+	NoteSlug    string `json:"note_slug"`
+	TargetID    string `json:"target_id"`
+	FilePath    string `json:"file_path"`
+	PublishedAt string `json:"published_at"`
+}
+
+func toPublishLogJSON(pl *model.PublishLog, noteSlug string) publishLogJSON {
+	return publishLogJSON{
+		ID:          pl.ID,
+		NoteSlug:    noteSlug,
+		TargetID:    pl.TargetID,
+		FilePath:    pl.FilePath,
+		PublishedAt: formatTime(pl.PublishedAt),
+	}
+}
+
 func printJSON(v any) error {
 	enc := json.NewEncoder(rootCmd.OutOrStdout())
 	enc.SetIndent("", "  ")
