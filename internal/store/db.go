@@ -74,7 +74,14 @@ func (d *DB) migrate() error {
 	}
 
 	if version < 1 {
-		return d.migrate001()
+		if err := d.migrate001(); err != nil {
+			return err
+		}
+	}
+	if version < 2 {
+		if err := d.migrate002(); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -130,6 +137,53 @@ func (d *DB) migrate001() error {
 	}
 	if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (1)"); err != nil {
 		return fmt.Errorf("recording migration 001: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+func (d *DB) migrate002() error {
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning migration transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	schema := `
+		CREATE TABLE IF NOT EXISTS notes (
+			id TEXT PRIMARY KEY,
+			title TEXT NOT NULL,
+			slug TEXT NOT NULL UNIQUE,
+			body TEXT NOT NULL DEFAULT '',
+			tags TEXT NOT NULL DEFAULT '',
+			pinned INTEGER NOT NULL DEFAULT 0,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			archived_at TIMESTAMP
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_notes_slug ON notes(slug);
+		CREATE INDEX IF NOT EXISTS idx_notes_archived_at ON notes(archived_at);
+
+		CREATE TABLE IF NOT EXISTS links (
+			id TEXT PRIMARY KEY,
+			source_type TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			target_type TEXT NOT NULL,
+			target_id TEXT NOT NULL,
+			context TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(source_type, source_id, target_type, target_id)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_links_source ON links(source_type, source_id);
+		CREATE INDEX IF NOT EXISTS idx_links_target ON links(target_type, target_id);
+	`
+	if _, err := tx.Exec(schema); err != nil {
+		return fmt.Errorf("applying migration 002: %w", err)
+	}
+	if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (2)"); err != nil {
+		return fmt.Errorf("recording migration 002: %w", err)
 	}
 
 	return tx.Commit()
