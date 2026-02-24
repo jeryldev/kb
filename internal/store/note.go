@@ -160,6 +160,36 @@ func (d *DB) ArchiveNote(id string) error {
 	return nil
 }
 
+func (d *DB) ResolveNoteID(prefix string) (string, error) {
+	rows, err := d.conn.Query(
+		"SELECT id FROM notes WHERE archived_at IS NULL",
+	)
+	if err != nil {
+		return "", fmt.Errorf("listing notes: %w", err)
+	}
+	defer rows.Close()
+
+	var matches []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return "", fmt.Errorf("scanning note id: %w", err)
+		}
+		if id == prefix || (len(prefix) >= 4 && strings.HasPrefix(id, prefix)) {
+			matches = append(matches, id)
+		}
+	}
+
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("no note found matching %q", prefix)
+	case 1:
+		return matches[0], nil
+	default:
+		return "", fmt.Errorf("ambiguous note ID %q matches %d notes; use more characters", prefix, len(matches))
+	}
+}
+
 func (d *DB) DeleteNote(id string) error {
 	result, err := d.conn.Exec("DELETE FROM notes WHERE id = ?", id)
 	if err != nil {

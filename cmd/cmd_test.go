@@ -1339,3 +1339,240 @@ func TestCardsFilterCaseInsensitive(t *testing.T) {
 		t.Fatalf("expected 2 cards matching 'AUTH' (case-insensitive search), got %d", len(cards2))
 	}
 }
+
+// --- Note tests ---
+
+func TestNoteCreateJSON(t *testing.T) {
+	setupTestDB(t)
+
+	out := executeCmd(t, "notes", "create", "My First Note", "--json")
+
+	var note noteJSON
+	if err := json.Unmarshal([]byte(out), &note); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if note.Title != "My First Note" {
+		t.Errorf("title = %q, want 'My First Note'", note.Title)
+	}
+	if note.Slug != "my-first-note" {
+		t.Errorf("slug = %q, want 'my-first-note'", note.Slug)
+	}
+}
+
+func TestNoteCreateWithFlags(t *testing.T) {
+	setupTestDB(t)
+
+	out := executeCmd(t, "notes", "create", "Tagged Note",
+		"--tags", "go,pkm",
+		"--body", "Some content with [[wikilinks]]",
+		"--slug", "custom-slug",
+		"--json")
+
+	var note noteJSON
+	if err := json.Unmarshal([]byte(out), &note); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if note.Tags != "go,pkm" {
+		t.Errorf("tags = %q, want 'go,pkm'", note.Tags)
+	}
+	if note.Slug != "custom-slug" {
+		t.Errorf("slug = %q, want 'custom-slug'", note.Slug)
+	}
+	if note.Body != "Some content with [[wikilinks]]" {
+		t.Errorf("body = %q", note.Body)
+	}
+}
+
+func TestNoteListJSON(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "notes", "create", "Note A", "--json")
+	executeCmd(t, "notes", "create", "Note B", "--json")
+
+	out := executeCmd(t, "notes", "--json")
+
+	var notes []noteJSON
+	if err := json.Unmarshal([]byte(out), &notes); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if len(notes) != 2 {
+		t.Fatalf("expected 2 notes, got %d", len(notes))
+	}
+}
+
+func TestNoteListByTag(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "notes", "create", "Go Note", "--tags", "go,tools", "--json")
+	executeCmd(t, "notes", "create", "Rust Note", "--tags", "rust", "--json")
+
+	out := executeCmd(t, "notes", "--tag", "go", "--json")
+
+	var notes []noteJSON
+	if err := json.Unmarshal([]byte(out), &notes); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if len(notes) != 1 {
+		t.Fatalf("expected 1 note with tag 'go', got %d", len(notes))
+	}
+}
+
+func TestNoteListBySearch(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "notes", "create", "Go Patterns", "--body", "Concurrency patterns", "--json")
+	executeCmd(t, "notes", "create", "Rust Guide", "--body", "Memory safety", "--json")
+
+	out := executeCmd(t, "notes", "--search", "concurrency", "--json")
+
+	var notes []noteJSON
+	if err := json.Unmarshal([]byte(out), &notes); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if len(notes) != 1 {
+		t.Fatalf("expected 1 note matching 'concurrency', got %d", len(notes))
+	}
+}
+
+func TestNoteShowJSON(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "notes", "create", "Show Me", "--body", "details here", "--json")
+
+	out := executeCmd(t, "notes", "show", "show-me", "--json")
+
+	var note noteJSON
+	if err := json.Unmarshal([]byte(out), &note); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if note.Title != "Show Me" {
+		t.Errorf("title = %q, want 'Show Me'", note.Title)
+	}
+	if note.Body != "details here" {
+		t.Errorf("body = %q, want 'details here'", note.Body)
+	}
+}
+
+func TestNoteEditJSON(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "notes", "create", "Original Title", "--json")
+
+	out := executeCmd(t, "notes", "edit", "original-title",
+		"--title", "Updated Title",
+		"--tags", "updated",
+		"--json")
+
+	var note noteJSON
+	if err := json.Unmarshal([]byte(out), &note); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if note.Title != "Updated Title" {
+		t.Errorf("title = %q, want 'Updated Title'", note.Title)
+	}
+	if note.Tags != "updated" {
+		t.Errorf("tags = %q, want 'updated'", note.Tags)
+	}
+}
+
+func TestNoteEditPartial(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "notes", "create", "Keep Title", "--tags", "original", "--json")
+
+	out := executeCmd(t, "notes", "edit", "keep-title",
+		"--tags", "changed",
+		"--json")
+
+	var note noteJSON
+	if err := json.Unmarshal([]byte(out), &note); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if note.Title != "Keep Title" {
+		t.Errorf("title should be unchanged, got %q", note.Title)
+	}
+	if note.Tags != "changed" {
+		t.Errorf("tags = %q, want 'changed'", note.Tags)
+	}
+}
+
+func TestNoteDeleteJSON(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "notes", "create", "Delete Me", "--json")
+
+	out := executeCmd(t, "notes", "delete", "delete-me", "--json")
+
+	var note noteJSON
+	if err := json.Unmarshal([]byte(out), &note); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if note.Title != "Delete Me" {
+		t.Errorf("title = %q, want 'Delete Me'", note.Title)
+	}
+}
+
+func TestNoteBacklinksJSON(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "notes", "create", "Target Note", "--json")
+	executeCmd(t, "notes", "create", "Source Note",
+		"--body", "Links to [[target-note]] for info", "--json")
+
+	out := executeCmd(t, "notes", "backlinks", "target-note", "--json")
+
+	var links []backlinkJSON
+	if err := json.Unmarshal([]byte(out), &links); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if len(links) != 1 {
+		t.Fatalf("expected 1 backlink, got %d", len(links))
+	}
+}
+
+func TestNoteCreateHuman(t *testing.T) {
+	setupTestDB(t)
+
+	out := executeCmd(t, "notes", "create", "My Note")
+
+	if !strings.Contains(out, "Created note") || !strings.Contains(out, "my-note") {
+		t.Errorf("expected creation confirmation, got: %s", out)
+	}
+}
+
+func TestNoteListEmpty(t *testing.T) {
+	setupTestDB(t)
+
+	out := executeCmd(t, "notes")
+
+	if !strings.Contains(out, "No notes") {
+		t.Errorf("expected empty message, got: %s", out)
+	}
+}
+
+func TestNoteShowByIDPrefix(t *testing.T) {
+	setupTestDB(t)
+
+	createOut := executeCmd(t, "notes", "create", "ID Prefix Test", "--json")
+	var created noteJSON
+	json.Unmarshal([]byte(createOut), &created)
+
+	out := executeCmd(t, "notes", "show", created.ID[:8], "--json")
+
+	var note noteJSON
+	if err := json.Unmarshal([]byte(out), &note); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if note.ID != created.ID {
+		t.Errorf("expected full ID match via prefix")
+	}
+}
+
+func TestNoteShowNotFound(t *testing.T) {
+	setupTestDB(t)
+
+	_, err := executeCmdErr(t, "notes", "show", "nonexistent-slug")
+	if err == nil {
+		t.Error("expected error for nonexistent note")
+	}
+}

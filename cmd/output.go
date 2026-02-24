@@ -77,6 +77,36 @@ func toColumnJSON(col *model.Column, cardCount int) columnJSON {
 	}
 }
 
+type noteJSON struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Slug      string `json:"slug"`
+	Body      string `json:"body"`
+	Tags      string `json:"tags"`
+	Pinned    bool   `json:"pinned"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+type backlinkJSON struct {
+	SourceType string `json:"source_type"`
+	SourceID   string `json:"source_id"`
+	Context    string `json:"context"`
+}
+
+func toNoteJSON(n *model.Note) noteJSON {
+	return noteJSON{
+		ID:        n.ID,
+		Title:     n.Title,
+		Slug:      n.Slug,
+		Body:      n.Body,
+		Tags:      n.Tags,
+		Pinned:    n.Pinned,
+		CreatedAt: formatTime(n.CreatedAt),
+		UpdatedAt: formatTime(n.UpdatedAt),
+	}
+}
+
 func printJSON(v any) error {
 	enc := json.NewEncoder(rootCmd.OutOrStdout())
 	enc.SetIndent("", "  ")
