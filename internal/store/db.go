@@ -88,6 +88,11 @@ func (d *DB) migrate() error {
 			return err
 		}
 	}
+	if version < 4 {
+		if err := d.migrate004(); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
@@ -224,6 +229,46 @@ func (d *DB) migrate003() error {
 	}
 	if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (3)"); err != nil {
 		return fmt.Errorf("recording migration 003: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+func (d *DB) migrate004() error {
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning migration transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	schema := `
+		CREATE TABLE IF NOT EXISTS publish_targets (
+			id           TEXT PRIMARY KEY,
+			workspace_id TEXT REFERENCES workspaces(id),
+			name         TEXT NOT NULL UNIQUE,
+			engine       TEXT NOT NULL,
+			base_path    TEXT NOT NULL,
+			posts_dir    TEXT NOT NULL DEFAULT '_posts',
+			created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+
+		CREATE TABLE IF NOT EXISTS publish_log (
+			id           TEXT PRIMARY KEY,
+			note_id      TEXT NOT NULL REFERENCES notes(id),
+			target_id    TEXT NOT NULL REFERENCES publish_targets(id),
+			file_path    TEXT NOT NULL,
+			front_matter TEXT NOT NULL DEFAULT '',
+			published_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_publish_log_note_id ON publish_log(note_id);
+		CREATE INDEX IF NOT EXISTS idx_publish_log_target_id ON publish_log(target_id);
+	`
+	if _, err := tx.Exec(schema); err != nil {
+		return fmt.Errorf("applying migration 004: %w", err)
+	}
+	if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (4)"); err != nil {
+		return fmt.Errorf("recording migration 004: %w", err)
 	}
 
 	return tx.Commit()
