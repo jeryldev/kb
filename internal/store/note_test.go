@@ -233,3 +233,89 @@ func TestListNotesByTag(t *testing.T) {
 	}
 }
 
+func TestSyncNoteLinks(t *testing.T) {
+	db := testDB(t)
+
+	source, _ := db.CreateNote("Source", "source", "Links to [[target-a]] and [[target-b]]")
+	db.CreateNote("Target A", "target-a", "body")
+	db.CreateNote("Target B", "target-b", "body")
+
+	if err := db.SyncNoteLinks(source); err != nil {
+		t.Fatalf("syncing links: %v", err)
+	}
+
+	links, err := db.GetForwardLinks("note", source.ID)
+	if err != nil {
+		t.Fatalf("getting forward links: %v", err)
+	}
+	if len(links) != 2 {
+		t.Fatalf("expected 2 forward links, got %d", len(links))
+	}
+}
+
+func TestGetBacklinks(t *testing.T) {
+	db := testDB(t)
+
+	target, _ := db.CreateNote("Target", "target", "I am the target")
+	source1, _ := db.CreateNote("Source 1", "source-1", "See [[target]] for info")
+	source2, _ := db.CreateNote("Source 2", "source-2", "Also links to [[target]]")
+
+	db.SyncNoteLinks(source1)
+	db.SyncNoteLinks(source2)
+
+	links, err := db.GetBacklinks("note", target.ID)
+	if err != nil {
+		t.Fatalf("getting backlinks: %v", err)
+	}
+	if len(links) != 2 {
+		t.Fatalf("expected 2 backlinks, got %d", len(links))
+	}
+}
+
+func TestSyncNoteLinksUpdatesOnChange(t *testing.T) {
+	db := testDB(t)
+
+	source, _ := db.CreateNote("Source", "source", "Links to [[old-target]]")
+	db.CreateNote("Old Target", "old-target", "body")
+	db.CreateNote("New Target", "new-target", "body")
+
+	db.SyncNoteLinks(source)
+
+	links, _ := db.GetForwardLinks("note", source.ID)
+	if len(links) != 1 {
+		t.Fatalf("expected 1 link before update, got %d", len(links))
+	}
+
+	source.Body = "Now links to [[new-target]]"
+	db.UpdateNote(source)
+	db.SyncNoteLinks(source)
+
+	links, _ = db.GetForwardLinks("note", source.ID)
+	if len(links) != 1 {
+		t.Fatalf("expected 1 link after update, got %d", len(links))
+	}
+
+	newTarget, _ := db.GetNoteBySlug("new-target")
+	if links[0].TargetID != newTarget.ID {
+		t.Errorf("expected link to new-target, got target_id=%q", links[0].TargetID)
+	}
+}
+
+func TestSyncNoteLinksHandlesBrokenLinks(t *testing.T) {
+	db := testDB(t)
+
+	source, _ := db.CreateNote("Source", "source", "Links to [[nonexistent]]")
+
+	if err := db.SyncNoteLinks(source); err != nil {
+		t.Fatalf("syncing links with broken target: %v", err)
+	}
+
+	links, _ := db.GetForwardLinks("note", source.ID)
+	if len(links) != 1 {
+		t.Fatalf("expected 1 link (broken), got %d", len(links))
+	}
+	if links[0].TargetID != "nonexistent" {
+		t.Errorf("expected target_id to be the slug for broken links, got %q", links[0].TargetID)
+	}
+}
+
