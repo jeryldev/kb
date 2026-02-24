@@ -79,6 +79,30 @@ func toColumnJSON(col *model.Column, cardCount int) columnJSON {
 	}
 }
 
+type workspaceJSON struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Kind        string `json:"kind"`
+	Description string `json:"description"`
+	Path        string `json:"path"`
+	Position    int    `json:"position"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+func toWorkspaceJSON(ws *model.Workspace) workspaceJSON {
+	return workspaceJSON{
+		ID:          ws.ID,
+		Name:        ws.Name,
+		Kind:        string(ws.Kind),
+		Description: ws.Description,
+		Path:        ws.Path,
+		Position:    ws.Position,
+		CreatedAt:   formatTime(ws.CreatedAt),
+		UpdatedAt:   formatTime(ws.UpdatedAt),
+	}
+}
+
 type noteJSON struct {
 	ID          string  `json:"id"`
 	Title       string  `json:"title"`

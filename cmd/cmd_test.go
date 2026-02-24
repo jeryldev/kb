@@ -1576,3 +1576,331 @@ func TestNoteShowNotFound(t *testing.T) {
 		t.Error("expected error for nonexistent note")
 	}
 }
+
+// --- Workspace tests ---
+
+func TestWorkspaceCreateJSON(t *testing.T) {
+	setupTestDB(t)
+
+	out := executeCmd(t, "workspace", "create", "My Project", "--kind", "project", "--json")
+
+	var ws workspaceJSON
+	if err := json.Unmarshal([]byte(out), &ws); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if ws.Name != "My Project" {
+		t.Errorf("name = %q, want 'My Project'", ws.Name)
+	}
+	if ws.Kind != "project" {
+		t.Errorf("kind = %q, want 'project'", ws.Kind)
+	}
+}
+
+func TestWorkspaceCreateHuman(t *testing.T) {
+	setupTestDB(t)
+
+	out := executeCmd(t, "workspace", "create", "Test Area", "--kind", "area")
+
+	if !strings.Contains(out, "Created workspace") || !strings.Contains(out, "Test Area") {
+		t.Errorf("expected creation confirmation, got: %s", out)
+	}
+}
+
+func TestWorkspaceCreateWithFlags(t *testing.T) {
+	setupTestDB(t)
+
+	out := executeCmd(t, "workspace", "create", "Dev Project",
+		"--kind", "project",
+		"--description", "A dev project",
+		"--path", "/tmp/dev",
+		"--json")
+
+	var ws workspaceJSON
+	if err := json.Unmarshal([]byte(out), &ws); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if ws.Description != "A dev project" {
+		t.Errorf("description = %q, want 'A dev project'", ws.Description)
+	}
+	if ws.Path != "/tmp/dev" {
+		t.Errorf("path = %q, want '/tmp/dev'", ws.Path)
+	}
+}
+
+func TestWorkspaceListJSON(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "workspace", "create", "Alpha", "--kind", "project", "--json")
+	executeCmd(t, "workspace", "create", "Beta", "--kind", "area", "--json")
+
+	out := executeCmd(t, "workspace", "--json")
+
+	var workspaces []workspaceJSON
+	if err := json.Unmarshal([]byte(out), &workspaces); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if len(workspaces) != 2 {
+		t.Fatalf("expected 2 workspaces, got %d", len(workspaces))
+	}
+}
+
+func TestWorkspaceListEmpty(t *testing.T) {
+	setupTestDB(t)
+
+	out := executeCmd(t, "workspace")
+
+	if !strings.Contains(out, "No workspaces") {
+		t.Errorf("expected empty message, got: %s", out)
+	}
+}
+
+func TestWorkspaceListByKind(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "workspace", "create", "P1", "--kind", "project", "--json")
+	executeCmd(t, "workspace", "create", "A1", "--kind", "area", "--json")
+	executeCmd(t, "workspace", "create", "P2", "--kind", "project", "--json")
+
+	out := executeCmd(t, "workspace", "--kind", "project", "--json")
+
+	var workspaces []workspaceJSON
+	if err := json.Unmarshal([]byte(out), &workspaces); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if len(workspaces) != 2 {
+		t.Fatalf("expected 2 project workspaces, got %d", len(workspaces))
+	}
+}
+
+func TestWorkspaceShowJSON(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "workspace", "create", "Show Me", "--kind", "resource", "--description", "A resource", "--json")
+
+	out := executeCmd(t, "workspace", "show", "Show Me", "--json")
+
+	var ws workspaceJSON
+	if err := json.Unmarshal([]byte(out), &ws); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if ws.Name != "Show Me" {
+		t.Errorf("name = %q, want 'Show Me'", ws.Name)
+	}
+	if ws.Kind != "resource" {
+		t.Errorf("kind = %q, want 'resource'", ws.Kind)
+	}
+}
+
+func TestWorkspaceShowHuman(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "workspace", "create", "My Workspace", "--kind", "project", "--json")
+
+	out := executeCmd(t, "workspace", "show", "My Workspace")
+
+	if !strings.Contains(out, "My Workspace") {
+		t.Errorf("expected name in output: %s", out)
+	}
+	if !strings.Contains(out, "[P]") {
+		t.Errorf("expected kind label in output: %s", out)
+	}
+}
+
+func TestWorkspaceEditJSON(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "workspace", "create", "Original", "--kind", "project", "--json")
+
+	out := executeCmd(t, "workspace", "edit", "Original",
+		"--name", "Updated",
+		"--description", "new desc",
+		"--kind", "area",
+		"--json")
+
+	var ws workspaceJSON
+	if err := json.Unmarshal([]byte(out), &ws); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if ws.Name != "Updated" {
+		t.Errorf("name = %q, want 'Updated'", ws.Name)
+	}
+	if ws.Kind != "area" {
+		t.Errorf("kind = %q, want 'area'", ws.Kind)
+	}
+	if ws.Description != "new desc" {
+		t.Errorf("description = %q, want 'new desc'", ws.Description)
+	}
+}
+
+func TestWorkspaceArchiveJSON(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "workspace", "create", "To Archive", "--kind", "project", "--json")
+
+	out := executeCmd(t, "workspace", "archive", "To Archive", "--json")
+
+	var ws workspaceJSON
+	if err := json.Unmarshal([]byte(out), &ws); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if ws.Kind != "archive" {
+		t.Errorf("kind = %q, want 'archive'", ws.Kind)
+	}
+}
+
+func TestWorkspaceDeleteJSON(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "workspace", "create", "To Delete", "--kind", "project", "--json")
+
+	out := executeCmd(t, "workspace", "delete", "To Delete", "--json")
+
+	var ws workspaceJSON
+	if err := json.Unmarshal([]byte(out), &ws); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if ws.Name != "To Delete" {
+		t.Errorf("name = %q, want 'To Delete'", ws.Name)
+	}
+}
+
+func TestWorkspaceNotFound(t *testing.T) {
+	setupTestDB(t)
+
+	_, err := executeCmdErr(t, "workspace", "show", "nonexistent")
+	if err == nil {
+		t.Error("expected error for nonexistent workspace")
+	}
+}
+
+func TestWorkspaceInvalidKind(t *testing.T) {
+	setupTestDB(t)
+
+	_, err := executeCmdErr(t, "workspace", "create", "Bad Kind", "--kind", "invalid")
+	if err == nil {
+		t.Error("expected error for invalid kind")
+	}
+}
+
+func TestBoardMoveToWorkspaceJSON(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "workspace", "create", "Dev WS", "--kind", "project", "--json")
+	createTestBoard(t, "my-board")
+
+	out := executeCmd(t, "boards", "move", "my-board", "--workspace", "Dev WS", "--json")
+
+	var board boardJSON
+	if err := json.Unmarshal([]byte(out), &board); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if board.WorkspaceID == nil {
+		t.Fatal("expected WorkspaceID to be set")
+	}
+}
+
+func TestBoardMoveHuman(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "workspace", "create", "WS", "--kind", "project", "--json")
+	createTestBoard(t, "my-board")
+
+	out := executeCmd(t, "boards", "move", "my-board", "--workspace", "WS")
+
+	if !strings.Contains(out, "Moved board") {
+		t.Errorf("expected move confirmation, got: %s", out)
+	}
+}
+
+func TestBoardMoveUnassign(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "workspace", "create", "WS", "--kind", "project", "--json")
+	createTestBoard(t, "my-board")
+	executeCmd(t, "boards", "move", "my-board", "--workspace", "WS", "--json")
+
+	out := executeCmd(t, "boards", "move", "my-board")
+
+	if !strings.Contains(out, "Removed board") {
+		t.Errorf("expected unassign confirmation, got: %s", out)
+	}
+}
+
+func TestNoteMoveToWorkspaceJSON(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "workspace", "create", "Notes WS", "--kind", "area", "--json")
+	executeCmd(t, "notes", "create", "My Note", "--json")
+
+	out := executeCmd(t, "notes", "move", "my-note", "--workspace", "Notes WS", "--json")
+
+	var note noteJSON
+	if err := json.Unmarshal([]byte(out), &note); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if note.WorkspaceID == nil {
+		t.Fatal("expected WorkspaceID to be set")
+	}
+}
+
+func TestNoteMoveHuman(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "workspace", "create", "WS", "--kind", "project", "--json")
+	executeCmd(t, "notes", "create", "My Note", "--json")
+
+	out := executeCmd(t, "notes", "move", "my-note", "--workspace", "WS")
+
+	if !strings.Contains(out, "Moved note") {
+		t.Errorf("expected move confirmation, got: %s", out)
+	}
+}
+
+func TestNoteMoveUnassign(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "workspace", "create", "WS", "--kind", "project", "--json")
+	executeCmd(t, "notes", "create", "My Note", "--json")
+	executeCmd(t, "notes", "move", "my-note", "--workspace", "WS", "--json")
+
+	out := executeCmd(t, "notes", "move", "my-note")
+
+	if !strings.Contains(out, "Removed note") {
+		t.Errorf("expected unassign confirmation, got: %s", out)
+	}
+}
+
+func TestWorkspaceShowWithContents(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "workspace", "create", "Full WS", "--kind", "project", "--json")
+	createTestBoard(t, "ws-board")
+	executeCmd(t, "boards", "move", "ws-board", "--workspace", "Full WS", "--json")
+	executeCmd(t, "notes", "create", "WS Note", "--json")
+	executeCmd(t, "notes", "move", "ws-note", "--workspace", "Full WS", "--json")
+
+	out := executeCmd(t, "workspace", "show", "Full WS")
+
+	if !strings.Contains(out, "ws-board") {
+		t.Errorf("expected board name in show output: %s", out)
+	}
+	if !strings.Contains(out, "ws-note") {
+		t.Errorf("expected note slug in show output: %s", out)
+	}
+}
+
+func TestWorkspaceAlias(t *testing.T) {
+	setupTestDB(t)
+
+	executeCmd(t, "ws", "create", "Alias Test", "--kind", "project", "--json")
+
+	out := executeCmd(t, "ws", "--json")
+
+	var workspaces []workspaceJSON
+	if err := json.Unmarshal([]byte(out), &workspaces); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if len(workspaces) != 1 {
+		t.Fatalf("expected 1 workspace via alias, got %d", len(workspaces))
+	}
+}
