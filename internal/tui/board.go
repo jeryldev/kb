@@ -596,11 +596,15 @@ func (a *App) viewBoard() string {
 		doneCards = len(a.board.cards[lastCol.ID])
 	}
 
-	titleText := fmt.Sprintf(" kb: %s ", a.board.board.Name)
+	boardLabel := a.board.board.Name
+	if a.wsContent.workspace != nil {
+		boardLabel = a.wsContent.workspace.Name + " > " + a.board.board.Name
+	}
+	titleText := fmt.Sprintf(" kb: %s ", boardLabel)
 	if totalCards > 0 {
 		bar := progressBar(doneCards, totalCards, 10)
 		titleText = fmt.Sprintf(" kb: %s  %s %d/%d ",
-			a.board.board.Name, bar, doneCards, totalCards)
+			boardLabel, bar, doneCards, totalCards)
 	}
 	titleBar := titleBarStyle.Width(w).Render(titleText)
 
@@ -824,7 +828,11 @@ func (a *App) viewBoardHelp() string {
 		h = 24
 	}
 
-	titleBar := titleBarStyle.Width(w).Render(fmt.Sprintf(" kb: %s ", a.board.board.Name))
+	helpBoardLabel := a.board.board.Name
+	if a.wsContent.workspace != nil {
+		helpBoardLabel = a.wsContent.workspace.Name + " > " + a.board.board.Name
+	}
+	titleBar := titleBarStyle.Width(w).Render(fmt.Sprintf(" kb: %s ", helpBoardLabel))
 	statusBar := statusBarStyle.Width(w).Render(" Press any key to close help")
 
 	entries := []struct{ key, desc string }{

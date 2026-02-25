@@ -2,6 +2,9 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -39,20 +42,8 @@ type noteBacklinksMsg struct {
 	backlinks []backlinkDisplay
 }
 
-func (a *App) loadNotes() tea.Cmd {
-	return func() tea.Msg {
-		notes, err := a.db.ListNotes()
-		if err != nil {
-			return errMsg{err}
-		}
-		return notesLoadedMsg{notes}
-	}
-}
-
-func (a *App) switchToNotes() tea.Cmd {
-	a.mode = modeNotes
-	a.noteList = noteListModel{}
-	return a.loadNotes()
+type noteEditedMsg struct {
+	note *model.Note
 }
 
 func (a *App) switchToNoteView(note *model.Note) tea.Cmd {
@@ -244,9 +235,19 @@ func (a *App) viewNoteList() string {
 }
 
 func (a *App) noteListLayout(_ int, titleBar, filterBar, statusBar, content string) string {
-	sections := []string{titleBar, content}
+	h := a.height
+	if h == 0 {
+		h = 24
+	}
+	contentH := h - lipgloss.Height(titleBar) - lipgloss.Height(statusBar) - 1
 	if filterBar != "" {
-		sections = []string{titleBar, filterBar, content}
+		contentH -= lipgloss.Height(filterBar)
+	}
+	sized := lipgloss.NewStyle().Height(contentH).Render(content)
+
+	sections := []string{titleBar, sized}
+	if filterBar != "" {
+		sections = []string{titleBar, filterBar, sized}
 	}
 	sections = append(sections, statusBar)
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
@@ -258,6 +259,9 @@ func (a *App) updateNoteView(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case noteBacklinksMsg:
 		a.noteView.backlinks = msg.backlinks
+
+	case noteEditedMsg:
+		a.noteView.note = msg.note
 
 	case errMsg:
 		a.mode = modeNotes
@@ -274,6 +278,8 @@ func (a *App) updateNoteView(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			a.mode = modePicker
 			return a, a.initPicker()
+		case "e":
+			return a, a.editNoteExternal()
 		case "j", "down":
 			a.noteView.scroll++
 		case "k", "up":
@@ -283,6 +289,77 @@ func (a *App) updateNoteView(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return a, nil
+}
+
+// --- Note Edit (external editor) ---
+
+func resolveEditor() string {
+	if ed := os.Getenv("EDITOR"); ed != "" {
+		return ed
+	}
+	for _, name := range []string{"nvim", "vim", "vi", "nano"} {
+		if p, err := exec.LookPath(name); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+func editorDisplayName(editor string) string {
+	return filepath.Base(editor)
+}
+
+func (a *App) editNoteExternal() tea.Cmd {
+	note := a.noteView.note
+	if note == nil {
+		return nil
+	}
+
+	editor := resolveEditor()
+	if editor == "" {
+		return nil
+	}
+
+	tmpFile, err := os.CreateTemp("", fmt.Sprintf("kb-note-%s-*.md", note.Slug))
+	if err != nil {
+		return func() tea.Msg { return errMsg{err} }
+	}
+	tmpPath := tmpFile.Name()
+
+	if _, err := tmpFile.WriteString(note.Body); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		return func() tea.Msg { return errMsg{err} }
+	}
+	tmpFile.Close()
+
+	c := exec.Command(editor, tmpPath)
+	c.Stdin = os.Stdin
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+
+	noteID := note.ID
+	db := a.db
+
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		defer os.Remove(tmpPath)
+		if err != nil {
+			return errMsg{err}
+		}
+		data, err := os.ReadFile(tmpPath)
+		if err != nil {
+			return errMsg{err}
+		}
+		current, err := db.GetNote(noteID)
+		if err != nil {
+			return errMsg{err}
+		}
+		current.Body = string(data)
+		if err := db.UpdateNote(current); err != nil {
+			return errMsg{err}
+		}
+		return noteEditedMsg{note: current}
+	})
 }
 
 func (a *App) viewNoteDetail() string {
@@ -297,7 +374,11 @@ func (a *App) viewNoteDetail() string {
 
 	note := a.noteView.note
 	titleBar := titleBarStyle.Width(w).Render(" " + note.Title + " ")
-	statusBar := statusBarStyle.Width(w).Render(" j/k: scroll   b: back   q: quit")
+	editHint := "e: edit"
+	if editor := resolveEditor(); editor != "" {
+		editHint = fmt.Sprintf("e: edit (%s)", editorDisplayName(editor))
+	}
+	statusBar := statusBarStyle.Width(w).Render(fmt.Sprintf(" j/k: scroll   %s   b: back   q: quit", editHint))
 
 	contentH := h - lipgloss.Height(titleBar) - lipgloss.Height(statusBar) - 1
 	contentW := max(20, w-4)
@@ -346,6 +427,7 @@ func (a *App) viewNoteDetail() string {
 	end := min(start+contentH, len(lines))
 	visible := lines[start:end]
 
-	content := "  " + strings.Join(visible, "\n  ")
+	inner := "  " + strings.Join(visible, "\n  ")
+	content := lipgloss.NewStyle().Height(contentH).Render(inner)
 	return lipgloss.JoinVertical(lipgloss.Left, titleBar, content, statusBar)
 }

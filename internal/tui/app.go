@@ -28,8 +28,8 @@ type App struct {
 	board     boardModel
 	cardView  cardViewModel
 	card      cardModel
-	noteList  noteListModel
-	noteView  noteViewModel
+	noteList noteListModel
+	noteView noteViewModel
 
 	width  int
 	height int
@@ -44,7 +44,6 @@ func NewApp(db *store.DB, boardName string) *App {
 }
 
 func (a *App) Init() tea.Cmd {
-	a.picker.autoSelect = true
 	return a.initPicker()
 }
 

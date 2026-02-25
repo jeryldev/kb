@@ -371,3 +371,64 @@ func TestNoteViewBackToPickerNoWorkspace(t *testing.T) {
 		t.Errorf("mode = %d, want modePicker (%d)", app.mode, modePicker)
 	}
 }
+
+func TestResolveEditor(t *testing.T) {
+	editor := resolveEditor()
+	if editor == "" {
+		t.Skip("no editor found on system")
+	}
+	name := editorDisplayName(editor)
+	if name == "" {
+		t.Error("editorDisplayName returned empty string")
+	}
+}
+
+func TestEditorDisplayName(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"/usr/bin/nvim", "nvim"},
+		{"/usr/local/bin/vim", "vim"},
+		{"nano", "nano"},
+	}
+	for _, tt := range tests {
+		got := editorDisplayName(tt.input)
+		if got != tt.want {
+			t.Errorf("editorDisplayName(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestNoteViewShowsEditorHint(t *testing.T) {
+	app := &App{
+		mode: modeNoteView,
+		noteView: noteViewModel{
+			note: &model.Note{
+				ID:        "n1",
+				Title:     "Test",
+				Slug:      "test",
+				Body:      "content",
+				UpdatedAt: time.Now(),
+			},
+		},
+		width:  80,
+		height: 30,
+	}
+
+	view := app.viewNoteDetail()
+	if !strings.Contains(view, "e: edit") {
+		t.Error("expected 'e: edit' hint in note view status bar")
+	}
+}
+
+func TestEditNoteExternalNilNote(t *testing.T) {
+	app := &App{
+		mode:     modeNoteView,
+		noteView: noteViewModel{note: nil},
+	}
+	cmd := app.editNoteExternal()
+	if cmd != nil {
+		t.Error("expected nil cmd when note is nil")
+	}
+}

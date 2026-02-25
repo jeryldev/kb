@@ -141,7 +141,7 @@ func (a *App) viewPicker() string {
 			cursor = "▸ "
 			style = formLabelActiveStyle
 		}
-		badge := helpStyle.Render(fmt.Sprintf("[%s]", ws.Kind.Label()))
+		badge := helpStyle.Render(fmt.Sprintf("(%s)", ws.Kind))
 		line := fmt.Sprintf("%s%s %s", cursor, style.Render(ws.Name), badge)
 		if ws.Description != "" {
 			line += helpStyle.Render(fmt.Sprintf("  %s", truncate(ws.Description, 40)))
@@ -161,11 +161,15 @@ type wsContentModel struct {
 	boards     []*model.Board
 	notes      []*model.Note
 	cursor     int
-	creating   bool
+	creating   string
 	input      string
 	confirming string
 	err        error
 	feedback   string
+}
+
+type noteCreatedMsg struct {
+	note *model.Note
 }
 
 type wsContentLoadedMsg struct {
@@ -238,10 +242,14 @@ func (a *App) updateWSContent(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case errMsg:
 		a.wsContent.err = msg.err
 
+	case noteCreatedMsg:
+		a.wsContent.feedback = fmt.Sprintf("Note %q created", msg.note.Title)
+		return a, a.loadWSContent(a.wsContent.workspace.ID)
+
 	case tea.KeyMsg:
 		a.wsContent.feedback = ""
 
-		if a.wsContent.creating {
+		if a.wsContent.creating != "" {
 			return a.updateWSContentCreating(msg)
 		}
 
@@ -268,7 +276,10 @@ func (a *App) updateWSContent(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return a, a.switchToNoteView(a.wsContent.selectedNote())
 			}
 		case "n":
-			a.wsContent.creating = true
+			a.wsContent.creating = "board"
+			a.wsContent.input = ""
+		case "N":
+			a.wsContent.creating = "note"
 			a.wsContent.input = ""
 		case "d", "D":
 			if total > 0 && a.wsContent.selectedKind() == "board" {
@@ -290,11 +301,22 @@ func (a *App) updateWSContentCreating(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		name := strings.TrimSpace(a.wsContent.input)
 		if name == "" {
-			a.wsContent.creating = false
+			a.wsContent.creating = ""
 			return a, nil
 		}
-		a.wsContent.creating = false
+		kind := a.wsContent.creating
+		a.wsContent.creating = ""
 		wsID := a.wsContent.workspace.ID
+		if kind == "note" {
+			slug := model.Slugify(name)
+			return a, func() tea.Msg {
+				note, err := a.db.CreateNote(name, slug, "", wsID)
+				if err != nil {
+					return errMsg{err}
+				}
+				return noteCreatedMsg{note}
+			}
+		}
 		return a, func() tea.Msg {
 			board, err := a.db.CreateBoard(name, "", wsID)
 			if err != nil {
@@ -303,7 +325,7 @@ func (a *App) updateWSContentCreating(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return boardCreatedMsg{board}
 		}
 	case "esc":
-		a.wsContent.creating = false
+		a.wsContent.creating = ""
 	case "backspace":
 		if len(a.wsContent.input) > 0 {
 			a.wsContent.input = a.wsContent.input[:len(a.wsContent.input)-1]
@@ -356,8 +378,8 @@ func (a *App) viewWSContent() string {
 	}
 
 	ws := a.wsContent.workspace
-	titleBar := titleBarStyle.Width(w).Render(fmt.Sprintf(" %s  %s ", ws.Kind.Label(), ws.Name))
-	statusBar := statusBarStyle.Width(w).Render(" j/k: select   enter: open   n: new board   d: delete board   b: back   q: quit")
+	titleBar := titleBarStyle.Width(w).Render(fmt.Sprintf(" kb: %s (%s) ", ws.Name, ws.Kind))
+	statusBar := statusBarStyle.Width(w).Render(" j/k: select   enter: open   n: new board   N: new note   d: delete   b: back   q: quit")
 
 	contentHeight := h - lipgloss.Height(titleBar) - lipgloss.Height(statusBar) - 1
 
@@ -366,9 +388,13 @@ func (a *App) viewWSContent() string {
 		return lipgloss.JoinVertical(lipgloss.Left, titleBar, content, statusBar)
 	}
 
-	if a.wsContent.creating {
+	if a.wsContent.creating != "" {
+		label := "New board name:"
+		if a.wsContent.creating == "note" {
+			label = "New note title:"
+		}
 		var rows []string
-		rows = append(rows, formLabelActiveStyle.Render("New board name:"))
+		rows = append(rows, formLabelActiveStyle.Render(label))
 		rows = append(rows, "")
 		rows = append(rows, fmt.Sprintf("  %s█", a.wsContent.input))
 		rows = append(rows, "")
@@ -447,6 +473,6 @@ func (a *App) viewWSContent() string {
 	}
 
 	content := lipgloss.JoinVertical(lipgloss.Left, rows...)
-	padded := lipgloss.NewStyle().Padding(1, 2).Render(content)
+	padded := lipgloss.NewStyle().Padding(1, 2).Height(contentHeight).Render(content)
 	return lipgloss.JoinVertical(lipgloss.Left, titleBar, padded, statusBar)
 }
