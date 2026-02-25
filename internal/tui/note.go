@@ -98,6 +98,9 @@ func (a *App) updateNoteList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q":
 			return a, tea.Quit
 		case "b", "esc":
+			if a.wsContent.workspace != nil {
+				return a, a.switchToWSContent(a.wsContent.workspace)
+			}
 			a.mode = modePicker
 			return a, a.initPicker()
 		case "j", "down":
@@ -266,8 +269,11 @@ func (a *App) updateNoteView(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q":
 			return a, tea.Quit
 		case "b", "esc":
-			a.mode = modeNotes
-			return a, a.loadNotes()
+			if a.wsContent.workspace != nil {
+				return a, a.switchToWSContent(a.wsContent.workspace)
+			}
+			a.mode = modePicker
+			return a, a.initPicker()
 		case "j", "down":
 			a.noteView.scroll++
 		case "k", "up":

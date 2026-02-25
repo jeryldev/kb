@@ -10,6 +10,7 @@ type mode int
 
 const (
 	modePicker mode = iota
+	modeWSContent
 	modeBoard
 	modeCardView
 	modeCardEdit
@@ -22,12 +23,13 @@ type App struct {
 	boardName string
 	mode      mode
 
-	picker   pickerModel
-	board    boardModel
-	cardView cardViewModel
-	card     cardModel
-	noteList noteListModel
-	noteView noteViewModel
+	picker    pickerModel
+	wsContent wsContentModel
+	board     boardModel
+	cardView  cardViewModel
+	card      cardModel
+	noteList  noteListModel
+	noteView  noteViewModel
 
 	width  int
 	height int
@@ -61,6 +63,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch a.mode {
 	case modePicker:
 		return a.updatePicker(msg)
+	case modeWSContent:
+		return a.updateWSContent(msg)
 	case modeBoard:
 		return a.updateBoard(msg)
 	case modeCardView:
@@ -80,6 +84,8 @@ func (a *App) View() string {
 	switch a.mode {
 	case modePicker:
 		return a.viewPicker()
+	case modeWSContent:
+		return a.viewWSContent()
 	case modeBoard:
 		return a.viewBoard()
 	case modeCardView:

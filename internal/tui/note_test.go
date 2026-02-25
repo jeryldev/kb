@@ -178,7 +178,18 @@ func TestNoteListViewContent(t *testing.T) {
 	}
 }
 
-func TestNoteListBackToPicker(t *testing.T) {
+func TestNoteListBackToWSContent(t *testing.T) {
+	ws := &model.Workspace{ID: "ws1", Name: "Default", Kind: model.KindArea}
+	app := testNoteApp(testNotes())
+	app.wsContent = wsContentModel{workspace: ws}
+
+	app.updateNoteList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	if app.mode != modeWSContent {
+		t.Errorf("mode = %d, want modeWSContent (%d)", app.mode, modeWSContent)
+	}
+}
+
+func TestNoteListBackToPickerNoWorkspace(t *testing.T) {
 	app := testNoteApp(testNotes())
 
 	app.updateNoteList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
@@ -317,35 +328,30 @@ func TestNoteViewScroll(t *testing.T) {
 	}
 }
 
-func TestBoardSwitchToNotes(t *testing.T) {
-	app := testApp(testColumns(), testCards())
-	app.mode = modeBoard
-
-	app.updateBoard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'N'}})
-	if app.mode != modeNotes {
-		t.Errorf("mode = %d, want modeNotes (%d)", app.mode, modeNotes)
-	}
-}
-
-func TestPickerSwitchToNotes(t *testing.T) {
+func TestNoteViewBackToWSContent(t *testing.T) {
+	ws := &model.Workspace{ID: "ws1", Name: "Default", Kind: model.KindArea}
 	app := &App{
-		mode: modePicker,
-		picker: pickerModel{
-			boards: []*model.Board{
-				{ID: "b1", Name: "Board 1"},
+		mode: modeNoteView,
+		noteView: noteViewModel{
+			note: &model.Note{
+				ID:        "n1",
+				Title:     "Test",
+				Slug:      "test",
+				UpdatedAt: time.Now(),
 			},
 		},
-		width:  80,
-		height: 24,
+		wsContent: wsContentModel{workspace: ws},
+		width:     80,
+		height:    24,
 	}
 
-	app.updatePicker(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'N'}})
-	if app.mode != modeNotes {
-		t.Errorf("mode = %d, want modeNotes (%d)", app.mode, modeNotes)
+	app.updateNoteView(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	if app.mode != modeWSContent {
+		t.Errorf("mode = %d, want modeWSContent (%d)", app.mode, modeWSContent)
 	}
 }
 
-func TestNoteViewBackToList(t *testing.T) {
+func TestNoteViewBackToPickerNoWorkspace(t *testing.T) {
 	app := &App{
 		mode: modeNoteView,
 		noteView: noteViewModel{
@@ -361,7 +367,7 @@ func TestNoteViewBackToList(t *testing.T) {
 	}
 
 	app.updateNoteView(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
-	if app.mode != modeNotes {
-		t.Errorf("mode = %d, want modeNotes (%d)", app.mode, modeNotes)
+	if app.mode != modePicker {
+		t.Errorf("mode = %d, want modePicker (%d)", app.mode, modePicker)
 	}
 }

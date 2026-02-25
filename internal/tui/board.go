@@ -148,9 +148,10 @@ func (a *App) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.togglePriorityFilter("medium")
 		case "4":
 			a.togglePriorityFilter("low")
-		case "N":
-			return a, a.switchToNotes()
 		case "b":
+			if a.wsContent.workspace != nil {
+				return a, a.switchToWSContent(a.wsContent.workspace)
+			}
 			a.mode = modePicker
 			return a, a.initPicker()
 		case "?":
@@ -603,7 +604,7 @@ func (a *App) viewBoard() string {
 	}
 	titleBar := titleBarStyle.Width(w).Render(titleText)
 
-	statusText := " hjkl: navigate   HJKL: move/reorder   n: new   Enter: view   e: edit   d: archive   b: boards   ?: help   q: quit"
+	statusText := " hjkl: navigate   HJKL: move/reorder   n: new   Enter: view   e: edit   d: archive   b: back   ?: help   q: quit"
 	if a.board.moving && a.board.confirming == "" {
 		statusText = fmt.Sprintf(" Moving %q — h/l: column  j/k: position  Enter: confirm  Esc: cancel",
 			truncate(a.board.moveCard.Title, 25))
