@@ -28,9 +28,10 @@ type backlinkDisplay struct {
 }
 
 type noteViewModel struct {
-	note      *model.Note
-	backlinks []backlinkDisplay
-	scroll    int
+	note       *model.Note
+	backlinks  []backlinkDisplay
+	scroll     int
+	confirming string
 }
 
 type notesLoadedMsg struct {
@@ -263,12 +264,23 @@ func (a *App) updateNoteView(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case noteEditedMsg:
 		a.noteView.note = msg.note
 
+	case noteDeletedMsg:
+		if a.wsContent.workspace != nil {
+			return a, a.switchToWSContent(a.wsContent.workspace)
+		}
+		a.mode = modePicker
+		return a, a.initPicker()
+
 	case errMsg:
 		a.mode = modeNotes
 		a.noteList.err = msg.err
 		return a, nil
 
 	case tea.KeyMsg:
+		if a.noteView.confirming != "" {
+			return a.updateNoteViewConfirming(msg)
+		}
+
 		switch msg.String() {
 		case "q":
 			return a, tea.Quit
@@ -280,6 +292,8 @@ func (a *App) updateNoteView(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, a.initPicker()
 		case "e":
 			return a, a.editNoteExternal()
+		case "d":
+			a.noteView.confirming = "delete"
 		case "j", "down":
 			a.noteView.scroll++
 		case "k", "up":
@@ -287,6 +301,33 @@ func (a *App) updateNoteView(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.noteView.scroll--
 			}
 		}
+	}
+	return a, nil
+}
+
+func (a *App) updateNoteViewConfirming(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "Y":
+		a.noteView.confirming = ""
+		note := a.noteView.note
+		if note == nil {
+			return a, nil
+		}
+		wsID := ""
+		if a.wsContent.workspace != nil {
+			wsID = a.wsContent.workspace.ID
+		}
+		return a, func() tea.Msg {
+			if err := a.db.DeleteNote(note.ID); err != nil {
+				return errMsg{err}
+			}
+			if wsID != "" {
+				return noteDeletedMsg{workspaceID: wsID}
+			}
+			return workspacesLoadedMsg{}
+		}
+	default:
+		a.noteView.confirming = ""
 	}
 	return a, nil
 }
@@ -378,10 +419,15 @@ func (a *App) viewNoteDetail() string {
 	if editor := resolveEditor(); editor != "" {
 		editHint = fmt.Sprintf("e: edit (%s)", editorDisplayName(editor))
 	}
-	statusBar := statusBarStyle.Width(w).Render(fmt.Sprintf(" j/k: scroll   %s   b: back   q: quit", editHint))
+	statusBar := statusBarStyle.Width(w).Render(fmt.Sprintf(" j/k: scroll   %s   d: delete   b: back   q: quit", editHint))
 
 	contentH := h - lipgloss.Height(titleBar) - lipgloss.Height(statusBar) - 1
 	contentW := max(20, w-4)
+
+	if a.noteView.confirming != "" {
+		content := renderCenteredConfirm(w, contentH, fmt.Sprintf("Delete note %q?", note.Title))
+		return lipgloss.JoinVertical(lipgloss.Left, titleBar, content, statusBar)
+	}
 
 	var sections []string
 

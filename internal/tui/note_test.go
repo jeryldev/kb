@@ -422,6 +422,74 @@ func TestNoteViewShowsEditorHint(t *testing.T) {
 	}
 }
 
+func TestNoteViewDeleteConfirm(t *testing.T) {
+	app := &App{
+		mode: modeNoteView,
+		noteView: noteViewModel{
+			note: &model.Note{
+				ID:        "n1",
+				Title:     "Test",
+				Slug:      "test",
+				UpdatedAt: time.Now(),
+			},
+		},
+		width:  80,
+		height: 24,
+	}
+
+	app.updateNoteView(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	if app.noteView.confirming != "delete" {
+		t.Errorf("confirming = %q, want 'delete'", app.noteView.confirming)
+	}
+}
+
+func TestNoteViewDeleteCancel(t *testing.T) {
+	app := &App{
+		mode: modeNoteView,
+		noteView: noteViewModel{
+			note: &model.Note{
+				ID:        "n1",
+				Title:     "Test",
+				Slug:      "test",
+				UpdatedAt: time.Now(),
+			},
+			confirming: "delete",
+		},
+		width:  80,
+		height: 24,
+	}
+
+	app.updateNoteView(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if app.noteView.confirming != "" {
+		t.Errorf("confirming = %q, want empty after cancel", app.noteView.confirming)
+	}
+	if app.mode != modeNoteView {
+		t.Errorf("mode = %d, want modeNoteView", app.mode)
+	}
+}
+
+func TestNoteViewDeleteConfirmDialog(t *testing.T) {
+	app := &App{
+		mode: modeNoteView,
+		noteView: noteViewModel{
+			note: &model.Note{
+				ID:        "n1",
+				Title:     "My Note",
+				Slug:      "my-note",
+				UpdatedAt: time.Now(),
+			},
+			confirming: "delete",
+		},
+		width:  80,
+		height: 24,
+	}
+
+	view := app.viewNoteDetail()
+	if !strings.Contains(view, "Delete note") {
+		t.Error("expected delete confirmation prompt in view")
+	}
+}
+
 func TestEditNoteExternalNilNote(t *testing.T) {
 	app := &App{
 		mode:     modeNoteView,
