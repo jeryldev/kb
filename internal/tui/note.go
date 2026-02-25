@@ -6,11 +6,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jeryldev/kb/internal/model"
 
 	tea "github.com/charmbracelet/bubbletea"
+)
+
+var (
+	cachedEditor     string
+	cachedEditorOnce sync.Once
 )
 
 type noteListModel struct {
@@ -272,9 +278,12 @@ func (a *App) updateNoteView(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.initPicker()
 
 	case errMsg:
-		a.mode = modeNotes
-		a.noteList.err = msg.err
-		return a, nil
+		if a.wsContent.workspace != nil {
+			a.wsContent.err = msg.err
+			return a, a.switchToWSContent(a.wsContent.workspace)
+		}
+		a.mode = modePicker
+		return a, a.initPicker()
 
 	case tea.KeyMsg:
 		if a.noteView.confirming != "" {
@@ -321,10 +330,7 @@ func (a *App) updateNoteViewConfirming(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err := a.db.DeleteNote(note.ID); err != nil {
 				return errMsg{err}
 			}
-			if wsID != "" {
-				return noteDeletedMsg{workspaceID: wsID}
-			}
-			return workspacesLoadedMsg{}
+			return noteDeletedMsg{workspaceID: wsID}
 		}
 	default:
 		a.noteView.confirming = ""
@@ -335,15 +341,19 @@ func (a *App) updateNoteViewConfirming(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // --- Note Edit (external editor) ---
 
 func resolveEditor() string {
-	if ed := os.Getenv("EDITOR"); ed != "" {
-		return ed
-	}
-	for _, name := range []string{"nvim", "vim", "vi", "nano"} {
-		if p, err := exec.LookPath(name); err == nil {
-			return p
+	cachedEditorOnce.Do(func() {
+		if ed := os.Getenv("EDITOR"); ed != "" {
+			cachedEditor = ed
+			return
 		}
-	}
-	return ""
+		for _, name := range []string{"nvim", "vim", "vi", "nano"} {
+			if p, err := exec.LookPath(name); err == nil {
+				cachedEditor = p
+				return
+			}
+		}
+	})
+	return cachedEditor
 }
 
 func editorDisplayName(editor string) string {

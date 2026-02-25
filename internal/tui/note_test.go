@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -487,6 +488,71 @@ func TestNoteViewDeleteConfirmDialog(t *testing.T) {
 	view := app.viewNoteDetail()
 	if !strings.Contains(view, "Delete note") {
 		t.Error("expected delete confirmation prompt in view")
+	}
+}
+
+func TestNoteViewDeletedMsgNoWorkspaceGoesToPicker(t *testing.T) {
+	app := &App{
+		mode: modeNoteView,
+		noteView: noteViewModel{
+			note: &model.Note{
+				ID:        "n1",
+				Title:     "Test",
+				Slug:      "test",
+				UpdatedAt: time.Now(),
+			},
+		},
+		width:  80,
+		height: 24,
+	}
+
+	app.updateNoteView(noteDeletedMsg{workspaceID: ""})
+	if app.mode != modePicker {
+		t.Errorf("mode = %d, want modePicker (%d) after noteDeletedMsg with no workspace", app.mode, modePicker)
+	}
+}
+
+func TestNoteViewErrorGoesBackToWSContent(t *testing.T) {
+	ws := &model.Workspace{ID: "ws1", Name: "Default", Kind: model.KindArea}
+	app := &App{
+		mode: modeNoteView,
+		noteView: noteViewModel{
+			note: &model.Note{
+				ID:        "n1",
+				Title:     "Test",
+				Slug:      "test",
+				UpdatedAt: time.Now(),
+			},
+		},
+		wsContent: wsContentModel{workspace: ws},
+		width:     80,
+		height:    24,
+	}
+
+	app.updateNoteView(errMsg{err: fmt.Errorf("test error")})
+	if app.mode != modeWSContent {
+		t.Errorf("mode = %d, want modeWSContent (%d)", app.mode, modeWSContent)
+	}
+}
+
+func TestNoteViewErrorGoesBackToPickerNoWorkspace(t *testing.T) {
+	app := &App{
+		mode: modeNoteView,
+		noteView: noteViewModel{
+			note: &model.Note{
+				ID:        "n1",
+				Title:     "Test",
+				Slug:      "test",
+				UpdatedAt: time.Now(),
+			},
+		},
+		width:  80,
+		height: 24,
+	}
+
+	app.updateNoteView(errMsg{err: fmt.Errorf("test error")})
+	if app.mode != modePicker {
+		t.Errorf("mode = %d, want modePicker (%d)", app.mode, modePicker)
 	}
 }
 
