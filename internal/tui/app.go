@@ -13,6 +13,8 @@ const (
 	modeBoard
 	modeCardView
 	modeCardEdit
+	modeNotes
+	modeNoteView
 )
 
 type App struct {
@@ -24,6 +26,8 @@ type App struct {
 	board    boardModel
 	cardView cardViewModel
 	card     cardModel
+	noteList noteListModel
+	noteView noteViewModel
 
 	width  int
 	height int
@@ -63,6 +67,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.updateCardView(msg)
 	case modeCardEdit:
 		return a.updateCard(msg)
+	case modeNotes:
+		return a.updateNoteList(msg)
+	case modeNoteView:
+		return a.updateNoteView(msg)
 	}
 
 	return a, nil
@@ -78,6 +86,10 @@ func (a *App) View() string {
 		return a.viewCardReadonly()
 	case modeCardEdit:
 		return a.viewCard()
+	case modeNotes:
+		return a.viewNoteList()
+	case modeNoteView:
+		return a.viewNoteDetail()
 	}
 	return ""
 }
