@@ -172,6 +172,10 @@ type noteCreatedMsg struct {
 	note *model.Note
 }
 
+type noteDeletedMsg struct {
+	workspaceID string
+}
+
 type wsContentLoadedMsg struct {
 	boards []*model.Board
 	notes  []*model.Note
@@ -246,6 +250,10 @@ func (a *App) updateWSContent(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.wsContent.feedback = fmt.Sprintf("Note %q created", msg.note.Title)
 		return a, a.loadWSContent(a.wsContent.workspace.ID)
 
+	case noteDeletedMsg:
+		a.wsContent.feedback = "Note deleted"
+		return a, a.loadWSContent(msg.workspaceID)
+
 	case tea.KeyMsg:
 		a.wsContent.feedback = ""
 
@@ -282,7 +290,7 @@ func (a *App) updateWSContent(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.wsContent.creating = "note"
 			a.wsContent.input = ""
 		case "d", "D":
-			if total > 0 && a.wsContent.selectedKind() == "board" {
+			if total > 0 {
 				a.wsContent.confirming = "delete"
 			}
 		case "b", "esc":
@@ -342,16 +350,28 @@ func (a *App) updateWSContentConfirming(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
 		a.wsContent.confirming = ""
-		board := a.wsContent.selectedBoard()
-		if board == nil {
+		wsID := a.wsContent.workspace.ID
+		if a.wsContent.selectedKind() == "board" {
+			board := a.wsContent.selectedBoard()
+			if board == nil {
+				return a, nil
+			}
+			return a, func() tea.Msg {
+				if err := a.db.DeleteBoard(board.ID); err != nil {
+					return errMsg{err}
+				}
+				return boardDeletedMsg{workspaceID: wsID}
+			}
+		}
+		note := a.wsContent.selectedNote()
+		if note == nil {
 			return a, nil
 		}
-		wsID := a.wsContent.workspace.ID
 		return a, func() tea.Msg {
-			if err := a.db.DeleteBoard(board.ID); err != nil {
+			if err := a.db.DeleteNote(note.ID); err != nil {
 				return errMsg{err}
 			}
-			return boardDeletedMsg{workspaceID: wsID}
+			return noteDeletedMsg{workspaceID: wsID}
 		}
 	default:
 		a.wsContent.confirming = ""
@@ -406,12 +426,23 @@ func (a *App) viewWSContent() string {
 	}
 
 	if a.wsContent.confirming != "" {
-		board := a.wsContent.selectedBoard()
-		name := ""
-		if board != nil {
-			name = board.Name
+		var prompt string
+		if a.wsContent.selectedKind() == "board" {
+			board := a.wsContent.selectedBoard()
+			name := ""
+			if board != nil {
+				name = board.Name
+			}
+			prompt = fmt.Sprintf("Delete board %q?", name)
+		} else {
+			note := a.wsContent.selectedNote()
+			name := ""
+			if note != nil {
+				name = note.Title
+			}
+			prompt = fmt.Sprintf("Delete note %q?", name)
 		}
-		content := renderCenteredConfirm(w, contentHeight, fmt.Sprintf("Delete board %q?", name))
+		content := renderCenteredConfirm(w, contentHeight, prompt)
 		return lipgloss.JoinVertical(lipgloss.Left, titleBar, content, statusBar)
 	}
 
