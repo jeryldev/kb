@@ -317,6 +317,34 @@ func TestNoteViewScroll(t *testing.T) {
 	}
 }
 
+func TestBoardSwitchToNotes(t *testing.T) {
+	app := testApp(testColumns(), testCards())
+	app.mode = modeBoard
+
+	app.updateBoard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'N'}})
+	if app.mode != modeNotes {
+		t.Errorf("mode = %d, want modeNotes (%d)", app.mode, modeNotes)
+	}
+}
+
+func TestPickerSwitchToNotes(t *testing.T) {
+	app := &App{
+		mode: modePicker,
+		picker: pickerModel{
+			boards: []*model.Board{
+				{ID: "b1", Name: "Board 1"},
+			},
+		},
+		width:  80,
+		height: 24,
+	}
+
+	app.updatePicker(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'N'}})
+	if app.mode != modeNotes {
+		t.Errorf("mode = %d, want modeNotes (%d)", app.mode, modeNotes)
+	}
+}
+
 func TestNoteViewBackToList(t *testing.T) {
 	app := &App{
 		mode: modeNoteView,

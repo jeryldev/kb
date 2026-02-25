@@ -148,6 +148,8 @@ func (a *App) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.togglePriorityFilter("medium")
 		case "4":
 			a.togglePriorityFilter("low")
+		case "N":
+			return a, a.switchToNotes()
 		case "b":
 			a.mode = modePicker
 			return a, a.initPicker()

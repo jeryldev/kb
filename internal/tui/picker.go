@@ -125,6 +125,8 @@ func (a *App) updatePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(visible) > 0 && a.picker.cursor < len(visible) {
 				a.picker.confirming = "delete"
 			}
+		case "N":
+			return a, a.switchToNotes()
 		case "/":
 			a.picker.filtering = true
 			a.picker.filterInput = ""
@@ -265,7 +267,7 @@ func (a *App) viewPicker() string {
 	}
 
 	titleBar := titleBarStyle.Width(w).Render(" kb: Select Board ")
-	statusBar := statusBarStyle.Width(w).Render(" j/k: select   enter: open   n: new board   /: search   d: delete board   q: quit")
+	statusBar := statusBarStyle.Width(w).Render(" j/k: select   enter: open   n: new board   N: notes   /: search   d: delete   q: quit")
 
 	filterBar := ""
 	if a.picker.filtering {
