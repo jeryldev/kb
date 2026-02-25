@@ -36,8 +36,9 @@ func TestMigrate002CreatesLinksTable(t *testing.T) {
 
 func TestCreateNote(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	note, err := db.CreateNote("My First Note", "my-first-note", "Hello world")
+	note, err := db.CreateNote("My First Note", "my-first-note", "Hello world", wsID)
 	if err != nil {
 		t.Fatalf("creating note: %v", err)
 	}
@@ -57,12 +58,13 @@ func TestCreateNote(t *testing.T) {
 
 func TestCreateNoteDuplicateSlug(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	_, err := db.CreateNote("Note A", "same-slug", "body a")
+	_, err := db.CreateNote("Note A", "same-slug", "body a", wsID)
 	if err != nil {
 		t.Fatalf("creating first note: %v", err)
 	}
-	_, err = db.CreateNote("Note B", "same-slug", "body b")
+	_, err = db.CreateNote("Note B", "same-slug", "body b", wsID)
 	if err == nil {
 		t.Error("expected error for duplicate slug")
 	}
@@ -70,8 +72,9 @@ func TestCreateNoteDuplicateSlug(t *testing.T) {
 
 func TestGetNoteBySlug(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	created, _ := db.CreateNote("Test Note", "test-note", "content")
+	created, _ := db.CreateNote("Test Note", "test-note", "content", wsID)
 
 	note, err := db.GetNoteBySlug("test-note")
 	if err != nil {
@@ -93,8 +96,9 @@ func TestGetNoteBySlugNotFound(t *testing.T) {
 
 func TestGetNote(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	created, _ := db.CreateNote("Test", "test", "body")
+	created, _ := db.CreateNote("Test", "test", "body", wsID)
 
 	note, err := db.GetNote(created.ID)
 	if err != nil {
@@ -107,9 +111,10 @@ func TestGetNote(t *testing.T) {
 
 func TestListNotes(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	db.CreateNote("Note A", "note-a", "body a")
-	db.CreateNote("Note B", "note-b", "body b")
+	db.CreateNote("Note A", "note-a", "body a", wsID)
+	db.CreateNote("Note B", "note-b", "body b", wsID)
 
 	notes, err := db.ListNotes()
 	if err != nil {
@@ -122,9 +127,10 @@ func TestListNotes(t *testing.T) {
 
 func TestListNotesExcludesArchived(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	note, _ := db.CreateNote("Archived", "archived", "body")
-	db.CreateNote("Active", "active", "body")
+	note, _ := db.CreateNote("Archived", "archived", "body", wsID)
+	db.CreateNote("Active", "active", "body", wsID)
 	db.ArchiveNote(note.ID)
 
 	notes, err := db.ListNotes()
@@ -141,8 +147,9 @@ func TestListNotesExcludesArchived(t *testing.T) {
 
 func TestUpdateNote(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	note, _ := db.CreateNote("Original", "original", "old body")
+	note, _ := db.CreateNote("Original", "original", "old body", wsID)
 	note.Title = "Updated"
 	note.Body = "new body"
 	note.Tags = "go,pkm"
@@ -165,8 +172,9 @@ func TestUpdateNote(t *testing.T) {
 
 func TestArchiveNote(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	note, _ := db.CreateNote("Archive Me", "archive-me", "body")
+	note, _ := db.CreateNote("Archive Me", "archive-me", "body", wsID)
 
 	if err := db.ArchiveNote(note.ID); err != nil {
 		t.Fatalf("archiving note: %v", err)
@@ -180,8 +188,9 @@ func TestArchiveNote(t *testing.T) {
 
 func TestDeleteNote(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	note, _ := db.CreateNote("Delete Me", "delete-me", "body")
+	note, _ := db.CreateNote("Delete Me", "delete-me", "body", wsID)
 
 	if err := db.DeleteNote(note.ID); err != nil {
 		t.Fatalf("deleting note: %v", err)
@@ -195,10 +204,11 @@ func TestDeleteNote(t *testing.T) {
 
 func TestSearchNotes(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	db.CreateNote("Go Patterns", "go-patterns", "Learn about Go concurrency")
-	db.CreateNote("Rust Guide", "rust-guide", "Memory safety in Rust")
-	db.CreateNote("Go Testing", "go-testing", "Table driven tests in Go")
+	db.CreateNote("Go Patterns", "go-patterns", "Learn about Go concurrency", wsID)
+	db.CreateNote("Rust Guide", "rust-guide", "Memory safety in Rust", wsID)
+	db.CreateNote("Go Testing", "go-testing", "Table driven tests in Go", wsID)
 
 	notes, err := db.SearchNotes("go")
 	if err != nil {
@@ -211,16 +221,17 @@ func TestSearchNotes(t *testing.T) {
 
 func TestListNotesByTag(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	n1, _ := db.CreateNote("Tagged A", "tagged-a", "body")
+	n1, _ := db.CreateNote("Tagged A", "tagged-a", "body", wsID)
 	n1.Tags = "go,tools"
 	db.UpdateNote(n1)
 
-	n2, _ := db.CreateNote("Tagged B", "tagged-b", "body")
+	n2, _ := db.CreateNote("Tagged B", "tagged-b", "body", wsID)
 	n2.Tags = "go,pkm"
 	db.UpdateNote(n2)
 
-	n3, _ := db.CreateNote("Tagged C", "tagged-c", "body")
+	n3, _ := db.CreateNote("Tagged C", "tagged-c", "body", wsID)
 	n3.Tags = "rust"
 	db.UpdateNote(n3)
 
@@ -235,10 +246,11 @@ func TestListNotesByTag(t *testing.T) {
 
 func TestSyncNoteLinks(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	source, _ := db.CreateNote("Source", "source", "Links to [[target-a]] and [[target-b]]")
-	db.CreateNote("Target A", "target-a", "body")
-	db.CreateNote("Target B", "target-b", "body")
+	source, _ := db.CreateNote("Source", "source", "Links to [[target-a]] and [[target-b]]", wsID)
+	db.CreateNote("Target A", "target-a", "body", wsID)
+	db.CreateNote("Target B", "target-b", "body", wsID)
 
 	if err := db.SyncNoteLinks(source); err != nil {
 		t.Fatalf("syncing links: %v", err)
@@ -255,10 +267,11 @@ func TestSyncNoteLinks(t *testing.T) {
 
 func TestGetBacklinks(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	target, _ := db.CreateNote("Target", "target", "I am the target")
-	source1, _ := db.CreateNote("Source 1", "source-1", "See [[target]] for info")
-	source2, _ := db.CreateNote("Source 2", "source-2", "Also links to [[target]]")
+	target, _ := db.CreateNote("Target", "target", "I am the target", wsID)
+	source1, _ := db.CreateNote("Source 1", "source-1", "See [[target]] for info", wsID)
+	source2, _ := db.CreateNote("Source 2", "source-2", "Also links to [[target]]", wsID)
 
 	db.SyncNoteLinks(source1)
 	db.SyncNoteLinks(source2)
@@ -274,10 +287,11 @@ func TestGetBacklinks(t *testing.T) {
 
 func TestSyncNoteLinksUpdatesOnChange(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	source, _ := db.CreateNote("Source", "source", "Links to [[old-target]]")
-	db.CreateNote("Old Target", "old-target", "body")
-	db.CreateNote("New Target", "new-target", "body")
+	source, _ := db.CreateNote("Source", "source", "Links to [[old-target]]", wsID)
+	db.CreateNote("Old Target", "old-target", "body", wsID)
+	db.CreateNote("New Target", "new-target", "body", wsID)
 
 	db.SyncNoteLinks(source)
 
@@ -303,8 +317,9 @@ func TestSyncNoteLinksUpdatesOnChange(t *testing.T) {
 
 func TestSyncNoteLinksHandlesBrokenLinks(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	source, _ := db.CreateNote("Source", "source", "Links to [[nonexistent]]")
+	source, _ := db.CreateNote("Source", "source", "Links to [[nonexistent]]", wsID)
 
 	if err := db.SyncNoteLinks(source); err != nil {
 		t.Fatalf("syncing links with broken target: %v", err)
@@ -318,4 +333,3 @@ func TestSyncNoteLinksHandlesBrokenLinks(t *testing.T) {
 		t.Errorf("expected target_id to be the slug for broken links, got %q", links[0].TargetID)
 	}
 }
-

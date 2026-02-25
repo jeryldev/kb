@@ -78,16 +78,12 @@ func BuildGraph(ds DataSource, workspaceID string) (*GraphData, error) {
 
 	nodes := make([]Node, 0, len(notes))
 	for _, n := range notes {
-		wsID := ""
-		if n.WorkspaceID != nil {
-			wsID = *n.WorkspaceID
-		}
 		nodes = append(nodes, Node{
 			ID:          n.ID,
 			Label:       n.Title,
 			Type:        "note",
 			Slug:        n.Slug,
-			WorkspaceID: wsID,
+			WorkspaceID: n.WorkspaceID,
 			Connections: connectionCount[n.ID],
 		})
 	}

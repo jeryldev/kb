@@ -174,7 +174,11 @@ func (a *App) updatePickerCreating(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		a.picker.creating = false
 		return a, func() tea.Msg {
-			board, err := a.db.CreateBoard(name, "")
+			defaultWS, err := a.db.GetDefaultWorkspace()
+			if err != nil {
+				return errMsg{err}
+			}
+			board, err := a.db.CreateBoard(name, "", defaultWS.ID)
 			if err != nil {
 				return errMsg{err}
 			}

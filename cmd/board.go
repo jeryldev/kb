@@ -44,7 +44,14 @@ var boardCreateCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		desc, _ := cmd.Flags().GetString("description")
-		board, err := db.CreateBoard(args[0], desc)
+
+		wsName, _ := cmd.Flags().GetString("workspace")
+		workspaceID, err := resolveWorkspaceIDForCreate(wsName)
+		if err != nil {
+			return err
+		}
+
+		board, err := db.CreateBoard(args[0], desc, workspaceID)
 		if err != nil {
 			return err
 		}
@@ -96,8 +103,24 @@ var boardDeleteCmd = &cobra.Command{
 	},
 }
 
+func resolveWorkspaceIDForCreate(wsName string) (string, error) {
+	if wsName != "" {
+		ws, err := resolveWorkspace(wsName)
+		if err != nil {
+			return "", err
+		}
+		return ws.ID, nil
+	}
+	defaultWS, err := db.GetDefaultWorkspace()
+	if err != nil {
+		return "", fmt.Errorf("getting default workspace: %w", err)
+	}
+	return defaultWS.ID, nil
+}
+
 func init() {
 	boardCreateCmd.Flags().StringP("description", "d", "", "Board description")
+	boardCreateCmd.Flags().StringP("workspace", "w", "", "Workspace to assign the board to (default: Default)")
 	boardDeleteCmd.Flags().BoolP("force", "f", false, "Skip confirmation")
 
 	boardCmd.AddCommand(boardCreateCmd)

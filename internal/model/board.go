@@ -9,7 +9,7 @@ type Board struct {
 	ID          string
 	Name        string
 	Description string
-	WorkspaceID *string
+	WorkspaceID string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }

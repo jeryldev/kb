@@ -12,12 +12,12 @@ import (
 var jsonOutput bool
 
 type boardJSON struct {
-	ID          string  `json:"id"`
-	Name        string  `json:"name"`
-	Description string  `json:"description"`
-	WorkspaceID *string `json:"workspace_id"`
-	CreatedAt   string  `json:"created_at"`
-	UpdatedAt   string  `json:"updated_at"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	WorkspaceID string `json:"workspace_id"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
 }
 
 type cardJSON struct {
@@ -104,15 +104,15 @@ func toWorkspaceJSON(ws *model.Workspace) workspaceJSON {
 }
 
 type noteJSON struct {
-	ID          string  `json:"id"`
-	Title       string  `json:"title"`
-	Slug        string  `json:"slug"`
-	Body        string  `json:"body"`
-	Tags        string  `json:"tags"`
-	Pinned      bool    `json:"pinned"`
-	WorkspaceID *string `json:"workspace_id"`
-	CreatedAt   string  `json:"created_at"`
-	UpdatedAt   string  `json:"updated_at"`
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Slug        string `json:"slug"`
+	Body        string `json:"body"`
+	Tags        string `json:"tags"`
+	Pinned      bool   `json:"pinned"`
+	WorkspaceID string `json:"workspace_id"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
 }
 
 type backlinkJSON struct {

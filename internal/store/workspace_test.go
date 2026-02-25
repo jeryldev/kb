@@ -71,9 +71,6 @@ func TestCreateWorkspace(t *testing.T) {
 	if ws.Path != "/tmp/project" {
 		t.Errorf("Path = %q, want %q", ws.Path, "/tmp/project")
 	}
-	if ws.Position != 0 {
-		t.Errorf("Position = %d, want 0", ws.Position)
-	}
 }
 
 func TestCreateWorkspaceAutoPosition(t *testing.T) {
@@ -87,11 +84,11 @@ func TestCreateWorkspaceAutoPosition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateWorkspace 2: %v", err)
 	}
-	if ws1.Position != 0 {
-		t.Errorf("ws1.Position = %d, want 0", ws1.Position)
+	if ws1.Position != 1 {
+		t.Errorf("ws1.Position = %d, want 1", ws1.Position)
 	}
-	if ws2.Position != 1 {
-		t.Errorf("ws2.Position = %d, want 1", ws2.Position)
+	if ws2.Position != 2 {
+		t.Errorf("ws2.Position = %d, want 2", ws2.Position)
 	}
 }
 
@@ -181,6 +178,21 @@ func TestGetWorkspaceByNameNotFound(t *testing.T) {
 	}
 }
 
+func TestGetDefaultWorkspace(t *testing.T) {
+	db := testDB(t)
+
+	ws, err := db.GetDefaultWorkspace()
+	if err != nil {
+		t.Fatalf("GetDefaultWorkspace: %v", err)
+	}
+	if ws.Name != model.DefaultWorkspaceName {
+		t.Errorf("Name = %q, want %q", ws.Name, model.DefaultWorkspaceName)
+	}
+	if ws.Kind != model.KindArea {
+		t.Errorf("Kind = %q, want %q", ws.Kind, model.KindArea)
+	}
+}
+
 func TestListWorkspaces(t *testing.T) {
 	db := testDB(t)
 
@@ -192,11 +204,8 @@ func TestListWorkspaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWorkspaces: %v", err)
 	}
-	if len(list) != 3 {
-		t.Fatalf("len = %d, want 3", len(list))
-	}
-	if list[0].Name != "Alpha" || list[1].Name != "Beta" || list[2].Name != "Gamma" {
-		t.Errorf("order = [%s, %s, %s], want [Alpha, Beta, Gamma]", list[0].Name, list[1].Name, list[2].Name)
+	if len(list) != 4 {
+		t.Fatalf("len = %d, want 4 (Default + 3 created)", len(list))
 	}
 }
 
@@ -219,8 +228,8 @@ func TestListWorkspacesByKind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWorkspacesByKind: %v", err)
 	}
-	if len(areas) != 1 {
-		t.Fatalf("len = %d, want 1", len(areas))
+	if len(areas) != 2 {
+		t.Fatalf("len = %d, want 2 (Default + A1)", len(areas))
 	}
 }
 
@@ -311,8 +320,9 @@ func TestDeleteWorkspaceNotFound(t *testing.T) {
 
 func TestSetBoardWorkspace(t *testing.T) {
 	db := testDB(t)
+	defaultWSID := testDefaultWSID(t, db)
 
-	board, err := db.CreateBoard("Test Board", "")
+	board, err := db.CreateBoard("Test Board", "", defaultWSID)
 	if err != nil {
 		t.Fatalf("CreateBoard: %v", err)
 	}
@@ -321,7 +331,7 @@ func TestSetBoardWorkspace(t *testing.T) {
 		t.Fatalf("CreateWorkspace: %v", err)
 	}
 
-	if err := db.SetBoardWorkspace(board.ID, &ws.ID); err != nil {
+	if err := db.SetBoardWorkspace(board.ID, ws.ID); err != nil {
 		t.Fatalf("SetBoardWorkspace: %v", err)
 	}
 
@@ -329,15 +339,16 @@ func TestSetBoardWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
 	}
-	if got.WorkspaceID == nil || *got.WorkspaceID != ws.ID {
-		t.Errorf("WorkspaceID = %v, want %q", got.WorkspaceID, ws.ID)
+	if got.WorkspaceID != ws.ID {
+		t.Errorf("WorkspaceID = %q, want %q", got.WorkspaceID, ws.ID)
 	}
 }
 
-func TestSetBoardWorkspaceUnassign(t *testing.T) {
+func TestSetBoardWorkspaceReassign(t *testing.T) {
 	db := testDB(t)
+	defaultWSID := testDefaultWSID(t, db)
 
-	board, err := db.CreateBoard("Test Board", "")
+	board, err := db.CreateBoard("Test Board", "", defaultWSID)
 	if err != nil {
 		t.Fatalf("CreateBoard: %v", err)
 	}
@@ -346,27 +357,28 @@ func TestSetBoardWorkspaceUnassign(t *testing.T) {
 		t.Fatalf("CreateWorkspace: %v", err)
 	}
 
-	_ = db.SetBoardWorkspace(board.ID, &ws.ID)
-	if err := db.SetBoardWorkspace(board.ID, nil); err != nil {
-		t.Fatalf("SetBoardWorkspace(nil): %v", err)
+	_ = db.SetBoardWorkspace(board.ID, ws.ID)
+	if err := db.SetBoardWorkspace(board.ID, defaultWSID); err != nil {
+		t.Fatalf("SetBoardWorkspace(default): %v", err)
 	}
 
 	got, _ := db.GetBoard(board.ID)
-	if got.WorkspaceID != nil {
-		t.Errorf("WorkspaceID = %v, want nil", got.WorkspaceID)
+	if got.WorkspaceID != defaultWSID {
+		t.Errorf("WorkspaceID = %q, want %q", got.WorkspaceID, defaultWSID)
 	}
 }
 
 func TestListBoardsByWorkspace(t *testing.T) {
 	db := testDB(t)
+	defaultWSID := testDefaultWSID(t, db)
 
 	ws, _ := db.CreateWorkspace("WS", model.KindProject, "", "")
-	b1, _ := db.CreateBoard("Board A", "")
-	b2, _ := db.CreateBoard("Board B", "")
-	_, _ = db.CreateBoard("Board C", "")
+	b1, _ := db.CreateBoard("Board A", "", defaultWSID)
+	b2, _ := db.CreateBoard("Board B", "", defaultWSID)
+	_, _ = db.CreateBoard("Board C", "", defaultWSID)
 
-	_ = db.SetBoardWorkspace(b1.ID, &ws.ID)
-	_ = db.SetBoardWorkspace(b2.ID, &ws.ID)
+	_ = db.SetBoardWorkspace(b1.ID, ws.ID)
+	_ = db.SetBoardWorkspace(b2.ID, ws.ID)
 
 	list, err := db.ListBoardsByWorkspace(ws.ID)
 	if err != nil {
@@ -379,8 +391,9 @@ func TestListBoardsByWorkspace(t *testing.T) {
 
 func TestSetNoteWorkspace(t *testing.T) {
 	db := testDB(t)
+	defaultWSID := testDefaultWSID(t, db)
 
-	note, err := db.CreateNote("Test Note", "test-note", "")
+	note, err := db.CreateNote("Test Note", "test-note", "", defaultWSID)
 	if err != nil {
 		t.Fatalf("CreateNote: %v", err)
 	}
@@ -389,7 +402,7 @@ func TestSetNoteWorkspace(t *testing.T) {
 		t.Fatalf("CreateWorkspace: %v", err)
 	}
 
-	if err := db.SetNoteWorkspace(note.ID, &ws.ID); err != nil {
+	if err := db.SetNoteWorkspace(note.ID, ws.ID); err != nil {
 		t.Fatalf("SetNoteWorkspace: %v", err)
 	}
 
@@ -397,19 +410,20 @@ func TestSetNoteWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetNote: %v", err)
 	}
-	if got.WorkspaceID == nil || *got.WorkspaceID != ws.ID {
-		t.Errorf("WorkspaceID = %v, want %q", got.WorkspaceID, ws.ID)
+	if got.WorkspaceID != ws.ID {
+		t.Errorf("WorkspaceID = %q, want %q", got.WorkspaceID, ws.ID)
 	}
 }
 
 func TestListNotesByWorkspace(t *testing.T) {
 	db := testDB(t)
+	defaultWSID := testDefaultWSID(t, db)
 
 	ws, _ := db.CreateWorkspace("WS", model.KindProject, "", "")
-	n1, _ := db.CreateNote("Note A", "note-a", "")
-	_, _ = db.CreateNote("Note B", "note-b", "")
+	n1, _ := db.CreateNote("Note A", "note-a", "", defaultWSID)
+	_, _ = db.CreateNote("Note B", "note-b", "", defaultWSID)
 
-	_ = db.SetNoteWorkspace(n1.ID, &ws.ID)
+	_ = db.SetNoteWorkspace(n1.ID, ws.ID)
 
 	list, err := db.ListNotesByWorkspace(ws.ID)
 	if err != nil {

@@ -188,8 +188,9 @@ func TestDeletePublishTargetNotFound(t *testing.T) {
 
 func TestCreatePublishLog(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	note, _ := db.CreateNote("Test Note", "test-note", "body")
+	note, _ := db.CreateNote("Test Note", "test-note", "body", wsID)
 	pt, _ := db.CreatePublishTarget("site", model.EngineJekyll, "/tmp", "_posts", nil)
 
 	pl, err := db.CreatePublishLog(note.ID, pt.ID, "_posts/2026-02-24-test-note.md", "---\ntitle: Test\n---")
@@ -206,8 +207,9 @@ func TestCreatePublishLog(t *testing.T) {
 
 func TestGetLatestPublishLog(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	note, _ := db.CreateNote("Test Note", "test-note", "body")
+	note, _ := db.CreateNote("Test Note", "test-note", "body", wsID)
 	pt, _ := db.CreatePublishTarget("site", model.EngineJekyll, "/tmp", "_posts", nil)
 
 	_, _ = db.CreatePublishLog(note.ID, pt.ID, "old-path.md", "old")
@@ -239,9 +241,10 @@ func TestGetLatestPublishLogNotFound(t *testing.T) {
 
 func TestListPublishLogs(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	n1, _ := db.CreateNote("Note 1", "note-1", "body")
-	n2, _ := db.CreateNote("Note 2", "note-2", "body")
+	n1, _ := db.CreateNote("Note 1", "note-1", "body", wsID)
+	n2, _ := db.CreateNote("Note 2", "note-2", "body", wsID)
 	pt, _ := db.CreatePublishTarget("site", model.EngineJekyll, "/tmp", "_posts", nil)
 
 	_, _ = db.CreatePublishLog(n1.ID, pt.ID, "path-1.md", "")
@@ -258,9 +261,10 @@ func TestListPublishLogs(t *testing.T) {
 
 func TestGetPublishedNoteSlugs(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	n1, _ := db.CreateNote("Published Note", "published-note", "body")
-	_, _ = db.CreateNote("Unpublished", "unpublished", "body")
+	n1, _ := db.CreateNote("Published Note", "published-note", "body", wsID)
+	_, _ = db.CreateNote("Unpublished", "unpublished", "body", wsID)
 	pt, _ := db.CreatePublishTarget("site", model.EngineJekyll, "/tmp", "_posts", nil)
 
 	_, _ = db.CreatePublishLog(n1.ID, pt.ID, "_posts/2026-02-24-published-note.md", "")

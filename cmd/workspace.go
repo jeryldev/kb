@@ -236,14 +236,18 @@ var boardMoveCmd = &cobra.Command{
 
 		wsName, _ := cmd.Flags().GetString("workspace")
 		if wsName == "" {
-			if err := db.SetBoardWorkspace(board.ID, nil); err != nil {
+			defaultWS, wsErr := db.GetDefaultWorkspace()
+			if wsErr != nil {
+				return fmt.Errorf("getting default workspace: %w", wsErr)
+			}
+			if err := db.SetBoardWorkspace(board.ID, defaultWS.ID); err != nil {
 				return err
 			}
 			if jsonOutput {
-				board.WorkspaceID = nil
+				board.WorkspaceID = defaultWS.ID
 				return printJSON(toBoardJSON(board))
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Removed board %q from workspace\n", board.Name)
+			fmt.Fprintf(cmd.OutOrStdout(), "Moved board %q to default workspace\n", board.Name)
 			return nil
 		}
 
@@ -252,12 +256,12 @@ var boardMoveCmd = &cobra.Command{
 			return err
 		}
 
-		if err := db.SetBoardWorkspace(board.ID, &ws.ID); err != nil {
+		if err := db.SetBoardWorkspace(board.ID, ws.ID); err != nil {
 			return err
 		}
 
 		if jsonOutput {
-			board.WorkspaceID = &ws.ID
+			board.WorkspaceID = ws.ID
 			return printJSON(toBoardJSON(board))
 		}
 
@@ -278,14 +282,18 @@ var noteMoveCmd = &cobra.Command{
 
 		wsName, _ := cmd.Flags().GetString("workspace")
 		if wsName == "" {
-			if err := db.SetNoteWorkspace(note.ID, nil); err != nil {
+			defaultWS, wsErr := db.GetDefaultWorkspace()
+			if wsErr != nil {
+				return fmt.Errorf("getting default workspace: %w", wsErr)
+			}
+			if err := db.SetNoteWorkspace(note.ID, defaultWS.ID); err != nil {
 				return err
 			}
 			if jsonOutput {
-				note.WorkspaceID = nil
+				note.WorkspaceID = defaultWS.ID
 				return printJSON(toNoteJSON(note))
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Removed note %q from workspace\n", note.Title)
+			fmt.Fprintf(cmd.OutOrStdout(), "Moved note %q to default workspace\n", note.Title)
 			return nil
 		}
 
@@ -294,12 +302,12 @@ var noteMoveCmd = &cobra.Command{
 			return err
 		}
 
-		if err := db.SetNoteWorkspace(note.ID, &ws.ID); err != nil {
+		if err := db.SetNoteWorkspace(note.ID, ws.ID); err != nil {
 			return err
 		}
 
 		if jsonOutput {
-			note.WorkspaceID = &ws.ID
+			note.WorkspaceID = ws.ID
 			return printJSON(toNoteJSON(note))
 		}
 

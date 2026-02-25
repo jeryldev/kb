@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/google/uuid"
+	"github.com/jeryldev/kb/internal/model"
 	_ "modernc.org/sqlite"
 )
 
@@ -90,6 +92,11 @@ func (d *DB) migrate() error {
 	}
 	if version < 4 {
 		if err := d.migrate004(); err != nil {
+			return err
+		}
+	}
+	if version < 5 {
+		if err := d.migrate005(); err != nil {
 			return err
 		}
 	}
@@ -269,6 +276,37 @@ func (d *DB) migrate004() error {
 	}
 	if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (4)"); err != nil {
 		return fmt.Errorf("recording migration 004: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+func (d *DB) migrate005() error {
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning migration transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	wsID := uuid.New().String()
+	_, err = tx.Exec(
+		`INSERT INTO workspaces (id, name, kind, description, path, position, created_at, updated_at)
+		 VALUES (?, ?, ?, '', '', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+		wsID, model.DefaultWorkspaceName, string(model.KindArea),
+	)
+	if err != nil {
+		return fmt.Errorf("inserting default workspace: %w", err)
+	}
+
+	if _, err := tx.Exec("UPDATE boards SET workspace_id = ? WHERE workspace_id IS NULL", wsID); err != nil {
+		return fmt.Errorf("updating boards with default workspace: %w", err)
+	}
+	if _, err := tx.Exec("UPDATE notes SET workspace_id = ? WHERE workspace_id IS NULL", wsID); err != nil {
+		return fmt.Errorf("updating notes with default workspace: %w", err)
+	}
+
+	if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (5)"); err != nil {
+		return fmt.Errorf("recording migration 005: %w", err)
 	}
 
 	return tx.Commit()

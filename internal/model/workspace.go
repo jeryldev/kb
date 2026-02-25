@@ -15,6 +15,8 @@ const (
 	KindArchive  WorkspaceKind = "archive"
 )
 
+const DefaultWorkspaceName = "Default"
+
 var WorkspaceKinds = []WorkspaceKind{KindProject, KindArea, KindResource, KindArchive}
 
 func ParseWorkspaceKind(s string) (WorkspaceKind, error) {

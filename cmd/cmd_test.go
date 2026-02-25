@@ -56,10 +56,20 @@ func executeCmd(t *testing.T, args ...string) string {
 
 func createTestBoard(t *testing.T, name string) {
 	t.Helper()
-	_, err := db.CreateBoard(name, "test board")
+	wsID := testDefaultWorkspaceID(t)
+	_, err := db.CreateBoard(name, "test board", wsID)
 	if err != nil {
 		t.Fatalf("creating test board: %v", err)
 	}
+}
+
+func testDefaultWorkspaceID(t *testing.T) string {
+	t.Helper()
+	ws, err := db.GetDefaultWorkspace()
+	if err != nil {
+		t.Fatalf("getting default workspace: %v", err)
+	}
+	return ws.ID
 }
 
 // --- Board tests ---
@@ -1640,18 +1650,18 @@ func TestWorkspaceListJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &workspaces); err != nil {
 		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
 	}
-	if len(workspaces) != 2 {
-		t.Fatalf("expected 2 workspaces, got %d", len(workspaces))
+	if len(workspaces) != 3 {
+		t.Fatalf("expected 3 workspaces (Default + 2 created), got %d", len(workspaces))
 	}
 }
 
-func TestWorkspaceListEmpty(t *testing.T) {
+func TestWorkspaceListShowsDefault(t *testing.T) {
 	setupTestDB(t)
 
 	out := executeCmd(t, "workspace")
 
-	if !strings.Contains(out, "No workspaces") {
-		t.Errorf("expected empty message, got: %s", out)
+	if !strings.Contains(out, "Default") {
+		t.Errorf("expected Default workspace in listing, got: %s", out)
 	}
 }
 
@@ -1795,7 +1805,7 @@ func TestBoardMoveToWorkspaceJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &board); err != nil {
 		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
 	}
-	if board.WorkspaceID == nil {
+	if board.WorkspaceID == "" {
 		t.Fatal("expected WorkspaceID to be set")
 	}
 }
@@ -1822,8 +1832,8 @@ func TestBoardMoveUnassign(t *testing.T) {
 
 	out := executeCmd(t, "boards", "move", "my-board")
 
-	if !strings.Contains(out, "Removed board") {
-		t.Errorf("expected unassign confirmation, got: %s", out)
+	if !strings.Contains(out, "Moved board") {
+		t.Errorf("expected move to default confirmation, got: %s", out)
 	}
 }
 
@@ -1839,7 +1849,7 @@ func TestNoteMoveToWorkspaceJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &note); err != nil {
 		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
 	}
-	if note.WorkspaceID == nil {
+	if note.WorkspaceID == "" {
 		t.Fatal("expected WorkspaceID to be set")
 	}
 }
@@ -1866,8 +1876,8 @@ func TestNoteMoveUnassign(t *testing.T) {
 
 	out := executeCmd(t, "notes", "move", "my-note")
 
-	if !strings.Contains(out, "Removed note") {
-		t.Errorf("expected unassign confirmation, got: %s", out)
+	if !strings.Contains(out, "Moved note") {
+		t.Errorf("expected move to default confirmation, got: %s", out)
 	}
 }
 
@@ -1901,8 +1911,8 @@ func TestWorkspaceAlias(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &workspaces); err != nil {
 		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
 	}
-	if len(workspaces) != 1 {
-		t.Fatalf("expected 1 workspace via alias, got %d", len(workspaces))
+	if len(workspaces) != 2 {
+		t.Fatalf("expected 2 workspaces via alias (Default + 1 created), got %d", len(workspaces))
 	}
 }
 

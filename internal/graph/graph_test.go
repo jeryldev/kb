@@ -19,7 +19,7 @@ func (m *mockDataSource) ListNotes() ([]*model.Note, error) {
 func (m *mockDataSource) ListNotesByWorkspace(workspaceID string) ([]*model.Note, error) {
 	var filtered []*model.Note
 	for _, n := range m.notes {
-		if n.WorkspaceID != nil && *n.WorkspaceID == workspaceID {
+		if n.WorkspaceID == workspaceID {
 			filtered = append(filtered, n)
 		}
 	}
@@ -126,11 +126,10 @@ func TestBuildGraphIgnoresNonNoteLinks(t *testing.T) {
 }
 
 func TestBuildGraphWorkspaceScoped(t *testing.T) {
-	ws1 := "ws-1"
 	ds := &mockDataSource{
 		notes: []*model.Note{
-			{ID: "n1", Title: "In WS", Slug: "in-ws", WorkspaceID: &ws1},
-			{ID: "n2", Title: "In WS 2", Slug: "in-ws-2", WorkspaceID: &ws1},
+			{ID: "n1", Title: "In WS", Slug: "in-ws", WorkspaceID: "ws-1"},
+			{ID: "n2", Title: "In WS 2", Slug: "in-ws-2", WorkspaceID: "ws-1"},
 			{ID: "n3", Title: "No WS", Slug: "no-ws"},
 		},
 		links: []*model.Link{
@@ -164,10 +163,9 @@ func TestBuildGraphEmpty(t *testing.T) {
 }
 
 func TestBuildGraphNodeFields(t *testing.T) {
-	ws := "ws-1"
 	ds := &mockDataSource{
 		notes: []*model.Note{
-			{ID: "n1", Title: "My Note", Slug: "my-note", WorkspaceID: &ws},
+			{ID: "n1", Title: "My Note", Slug: "my-note", WorkspaceID: "ws-1"},
 		},
 	}
 

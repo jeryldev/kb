@@ -14,7 +14,7 @@ type Note struct {
 	Body        string
 	Tags        string
 	Pinned      bool
-	WorkspaceID *string
+	WorkspaceID string
 	ArchivedAt  *time.Time
 	CreatedAt   time.Time
 	UpdatedAt   time.Time

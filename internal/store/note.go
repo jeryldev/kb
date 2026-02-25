@@ -10,7 +10,7 @@ import (
 	"github.com/jeryldev/kb/internal/model"
 )
 
-func (d *DB) CreateNote(title, slug, body string) (*model.Note, error) {
+func (d *DB) CreateNote(title, slug, body, workspaceID string) (*model.Note, error) {
 	if err := model.ValidateNoteTitle(title); err != nil {
 		return nil, err
 	}
@@ -20,12 +20,13 @@ func (d *DB) CreateNote(title, slug, body string) (*model.Note, error) {
 
 	now := time.Now().UTC()
 	note := &model.Note{
-		ID:        uuid.New().String(),
-		Title:     title,
-		Slug:      slug,
-		Body:      body,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:          uuid.New().String(),
+		Title:       title,
+		Slug:        slug,
+		Body:        body,
+		WorkspaceID: workspaceID,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
 	_, err := d.conn.Exec(
@@ -46,12 +47,13 @@ func (d *DB) CreateNote(title, slug, body string) (*model.Note, error) {
 func (d *DB) GetNote(id string) (*model.Note, error) {
 	note := &model.Note{}
 	var pinned int
+	var wsID *string
 	err := d.conn.QueryRow(
 		`SELECT id, title, slug, body, tags, pinned, workspace_id, created_at, updated_at, archived_at
 		 FROM notes WHERE id = ? AND archived_at IS NULL`,
 		id,
 	).Scan(&note.ID, &note.Title, &note.Slug, &note.Body, &note.Tags,
-		&pinned, &note.WorkspaceID, &note.CreatedAt, &note.UpdatedAt, &note.ArchivedAt)
+		&pinned, &wsID, &note.CreatedAt, &note.UpdatedAt, &note.ArchivedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("note not found")
 	}
@@ -59,18 +61,22 @@ func (d *DB) GetNote(id string) (*model.Note, error) {
 		return nil, fmt.Errorf("querying note: %w", err)
 	}
 	note.Pinned = pinned != 0
+	if wsID != nil {
+		note.WorkspaceID = *wsID
+	}
 	return note, nil
 }
 
 func (d *DB) GetNoteBySlug(slug string) (*model.Note, error) {
 	note := &model.Note{}
 	var pinned int
+	var wsID *string
 	err := d.conn.QueryRow(
 		`SELECT id, title, slug, body, tags, pinned, workspace_id, created_at, updated_at, archived_at
 		 FROM notes WHERE slug = ? AND archived_at IS NULL`,
 		slug,
 	).Scan(&note.ID, &note.Title, &note.Slug, &note.Body, &note.Tags,
-		&pinned, &note.WorkspaceID, &note.CreatedAt, &note.UpdatedAt, &note.ArchivedAt)
+		&pinned, &wsID, &note.CreatedAt, &note.UpdatedAt, &note.ArchivedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("note %q not found", slug)
 	}
@@ -78,6 +84,9 @@ func (d *DB) GetNoteBySlug(slug string) (*model.Note, error) {
 		return nil, fmt.Errorf("querying note: %w", err)
 	}
 	note.Pinned = pinned != 0
+	if wsID != nil {
+		note.WorkspaceID = *wsID
+	}
 	return note, nil
 }
 
@@ -124,7 +133,7 @@ func (d *DB) ListNotesByWorkspace(workspaceID string) ([]*model.Note, error) {
 	return scanNotes(rows)
 }
 
-func (d *DB) SetNoteWorkspace(noteID string, workspaceID *string) error {
+func (d *DB) SetNoteWorkspace(noteID, workspaceID string) error {
 	result, err := d.conn.Exec(
 		"UPDATE notes SET workspace_id = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL",
 		workspaceID, time.Now().UTC(), noteID,
@@ -242,13 +251,17 @@ func scanNotes(rows *sql.Rows) ([]*model.Note, error) {
 	for rows.Next() {
 		note := &model.Note{}
 		var pinned int
+		var wsID *string
 		if err := rows.Scan(
 			&note.ID, &note.Title, &note.Slug, &note.Body, &note.Tags,
-			&pinned, &note.WorkspaceID, &note.CreatedAt, &note.UpdatedAt, &note.ArchivedAt,
+			&pinned, &wsID, &note.CreatedAt, &note.UpdatedAt, &note.ArchivedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning note: %w", err)
 		}
 		note.Pinned = pinned != 0
+		if wsID != nil {
+			note.WorkspaceID = *wsID
+		}
 		notes = append(notes, note)
 	}
 	return notes, rows.Err()

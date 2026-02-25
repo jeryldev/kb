@@ -48,6 +48,10 @@ func (d *DB) CreateWorkspace(name string, kind model.WorkspaceKind, description,
 	return ws, nil
 }
 
+func (d *DB) GetDefaultWorkspace() (*model.Workspace, error) {
+	return d.GetWorkspaceByName(model.DefaultWorkspaceName)
+}
+
 func (d *DB) GetWorkspace(id string) (*model.Workspace, error) {
 	ws := &model.Workspace{}
 	var kind string

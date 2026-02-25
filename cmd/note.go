@@ -71,7 +71,13 @@ var noteCreateCmd = &cobra.Command{
 
 		body, _ := cmd.Flags().GetString("body")
 
-		note, err := db.CreateNote(title, slug, body)
+		wsName, _ := cmd.Flags().GetString("workspace")
+		workspaceID, err := resolveWorkspaceIDForCreate(wsName)
+		if err != nil {
+			return err
+		}
+
+		note, err := db.CreateNote(title, slug, body, workspaceID)
 		if err != nil {
 			return err
 		}
@@ -253,6 +259,7 @@ func init() {
 	noteCreateCmd.Flags().StringP("body", "b", "", "Note body content")
 	noteCreateCmd.Flags().StringP("tags", "t", "", "Comma-separated tags")
 	noteCreateCmd.Flags().String("slug", "", "Custom slug (default: auto-generated from title)")
+	noteCreateCmd.Flags().StringP("workspace", "w", "", "Workspace to assign the note to (default: Default)")
 
 	noteEditCmd.Flags().StringP("title", "T", "", "New title")
 	noteEditCmd.Flags().StringP("body", "b", "", "New body content")
