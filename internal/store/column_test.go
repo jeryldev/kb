@@ -8,7 +8,8 @@ import (
 
 func createTestBoard(t *testing.T, db *DB) *model.Board {
 	t.Helper()
-	board, err := db.CreateBoard("test-board", "")
+	wsID := testDefaultWSID(t, db)
+	board, err := db.CreateBoard("test-board", "", wsID)
 	if err != nil {
 		t.Fatalf("CreateBoard failed: %v", err)
 	}

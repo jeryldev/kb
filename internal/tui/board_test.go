@@ -565,55 +565,17 @@ func TestCardViewEscReturnsToBoard(t *testing.T) {
 	}
 }
 
-// --- Picker tests ---
-
-func TestPickerDeleteConfirm(t *testing.T) {
-	app := &App{width: 80, height: 40}
-	app.picker.boards = []*model.Board{
-		{ID: "b1", Name: "Board 1"},
-		{ID: "b2", Name: "Board 2"},
-	}
-	app.picker.cursor = 1
-
-	app.updatePicker(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
-
-	if app.picker.confirming != "delete" {
-		t.Errorf("confirming = %q, want %q", app.picker.confirming, "delete")
-	}
-}
-
-func TestPickerDeleteConfirmNoBoards(t *testing.T) {
-	app := &App{width: 80, height: 40}
-	app.picker.boards = nil
-
-	app.updatePicker(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
-
-	if app.picker.confirming != "" {
-		t.Error("d with no boards should not enter confirming")
-	}
-}
-
-func TestPickerConfirmCancel(t *testing.T) {
-	app := &App{width: 80, height: 40}
-	app.picker.boards = []*model.Board{{ID: "b1", Name: "Board 1"}}
-	app.picker.confirming = "delete"
-
-	app.updatePickerConfirming(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
-
-	if app.picker.confirming != "" {
-		t.Error("non-y key should cancel confirming")
-	}
-}
+// --- Picker tests (workspace-first) ---
 
 func TestPickerAutoSelectTrue(t *testing.T) {
 	app := &App{width: 80, height: 40}
 	app.picker.autoSelect = true
 
-	boards := []*model.Board{{ID: "b1", Name: "Board 1"}}
-	app.updatePicker(boardsLoadedMsg{boards: boards})
+	workspaces := []*model.Workspace{{ID: "ws1", Name: "Default", Kind: model.KindArea}}
+	app.updatePicker(workspacesLoadedMsg{workspaces: workspaces})
 
-	if app.mode != modeBoard {
-		t.Errorf("autoSelect=true with 1 board should switch to board mode, got mode=%d", app.mode)
+	if app.mode != modeWSContent {
+		t.Errorf("autoSelect=true with 1 workspace should switch to wsContent mode, got mode=%d", app.mode)
 	}
 }
 
@@ -621,29 +583,77 @@ func TestPickerAutoSelectFalse(t *testing.T) {
 	app := &App{width: 80, height: 40}
 	app.picker.autoSelect = false
 
-	boards := []*model.Board{{ID: "b1", Name: "Board 1"}}
-	app.updatePicker(boardsLoadedMsg{boards: boards})
+	workspaces := []*model.Workspace{{ID: "ws1", Name: "Default", Kind: model.KindArea}}
+	app.updatePicker(workspacesLoadedMsg{workspaces: workspaces})
 
-	if app.mode == modeBoard {
-		t.Error("autoSelect=false with 1 board should stay in picker")
+	if app.mode == modeWSContent {
+		t.Error("autoSelect=false with 1 workspace should stay in picker")
 	}
-	if len(app.picker.boards) != 1 {
-		t.Errorf("boards not loaded: got %d, want 1", len(app.picker.boards))
+	if len(app.picker.workspaces) != 1 {
+		t.Errorf("workspaces not loaded: got %d, want 1", len(app.picker.workspaces))
 	}
 }
 
-func TestPickerCursorClampAfterDelete(t *testing.T) {
+func TestPickerCursorClampAfterReload(t *testing.T) {
 	app := &App{width: 80, height: 40}
 	app.picker.cursor = 2
 
-	boards := []*model.Board{
-		{ID: "b1", Name: "Board 1"},
-		{ID: "b2", Name: "Board 2"},
+	workspaces := []*model.Workspace{
+		{ID: "ws1", Name: "Default", Kind: model.KindArea},
+		{ID: "ws2", Name: "My Project", Kind: model.KindProject},
 	}
-	app.updatePicker(boardsLoadedMsg{boards: boards})
+	app.updatePicker(workspacesLoadedMsg{workspaces: workspaces})
 
-	if app.picker.cursor >= len(app.picker.boards) {
-		t.Errorf("cursor = %d, should be clamped to < %d", app.picker.cursor, len(app.picker.boards))
+	if app.picker.cursor >= len(app.picker.workspaces) {
+		t.Errorf("cursor = %d, should be clamped to < %d", app.picker.cursor, len(app.picker.workspaces))
+	}
+}
+
+func TestPickerNavigation(t *testing.T) {
+	app := &App{width: 80, height: 40}
+	app.picker.workspaces = []*model.Workspace{
+		{ID: "ws1", Name: "Default", Kind: model.KindArea},
+		{ID: "ws2", Name: "My Project", Kind: model.KindProject},
+		{ID: "ws3", Name: "Research", Kind: model.KindResource},
+	}
+
+	app.updatePicker(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if app.picker.cursor != 1 {
+		t.Errorf("after j: cursor = %d, want 1", app.picker.cursor)
+	}
+
+	app.updatePicker(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if app.picker.cursor != 2 {
+		t.Errorf("after j: cursor = %d, want 2", app.picker.cursor)
+	}
+
+	// Should not go past end
+	app.updatePicker(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if app.picker.cursor != 2 {
+		t.Errorf("after j at end: cursor = %d, want 2", app.picker.cursor)
+	}
+
+	app.updatePicker(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if app.picker.cursor != 1 {
+		t.Errorf("after k: cursor = %d, want 1", app.picker.cursor)
+	}
+}
+
+func TestPickerSelectWorkspace(t *testing.T) {
+	app := &App{width: 80, height: 40}
+	app.picker.workspaces = []*model.Workspace{
+		{ID: "ws1", Name: "Default", Kind: model.KindArea},
+		{ID: "ws2", Name: "My Project", Kind: model.KindProject},
+	}
+	app.picker.cursor = 1
+
+	app.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if app.mode != modeWSContent {
+		t.Errorf("mode = %d, want modeWSContent (%d)", app.mode, modeWSContent)
+	}
+	if app.wsContent.workspace.ID != "ws2" {
+		t.Errorf("wsContent.workspace.ID = %q, want %q", app.wsContent.workspace.ID, "ws2")
 	}
 }
 

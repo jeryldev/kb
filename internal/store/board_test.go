@@ -8,8 +8,9 @@ import (
 
 func TestCreateBoard(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	board, err := db.CreateBoard("test-project", "A test board")
+	board, err := db.CreateBoard("test-project", "A test board", wsID)
 	if err != nil {
 		t.Fatalf("CreateBoard failed: %v", err)
 	}
@@ -26,8 +27,9 @@ func TestCreateBoard(t *testing.T) {
 
 func TestCreateBoardCreatesDefaultColumns(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	board, err := db.CreateBoard("test-project", "")
+	board, err := db.CreateBoard("test-project", "", wsID)
 	if err != nil {
 		t.Fatalf("CreateBoard failed: %v", err)
 	}
@@ -51,8 +53,9 @@ func TestCreateBoardCreatesDefaultColumns(t *testing.T) {
 
 func TestCreateBoardRejectsEmptyName(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	_, err := db.CreateBoard("", "desc")
+	_, err := db.CreateBoard("", "desc", wsID)
 	if err == nil {
 		t.Error("CreateBoard with empty name should return error")
 	}
@@ -60,13 +63,14 @@ func TestCreateBoardRejectsEmptyName(t *testing.T) {
 
 func TestCreateBoardRejectsDuplicateName(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	_, err := db.CreateBoard("dup", "first")
+	_, err := db.CreateBoard("dup", "first", wsID)
 	if err != nil {
 		t.Fatalf("first CreateBoard failed: %v", err)
 	}
 
-	_, err = db.CreateBoard("dup", "second")
+	_, err = db.CreateBoard("dup", "second", wsID)
 	if err == nil {
 		t.Error("duplicate board name should return error")
 	}
@@ -74,8 +78,9 @@ func TestCreateBoardRejectsDuplicateName(t *testing.T) {
 
 func TestGetBoard(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	created, _ := db.CreateBoard("test", "desc")
+	created, _ := db.CreateBoard("test", "desc", wsID)
 
 	got, err := db.GetBoard(created.ID)
 	if err != nil {
@@ -97,8 +102,9 @@ func TestGetBoardNotFound(t *testing.T) {
 
 func TestGetBoardByName(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	created, _ := db.CreateBoard("my-board", "")
+	created, _ := db.CreateBoard("my-board", "", wsID)
 
 	got, err := db.GetBoardByName("my-board")
 	if err != nil {
@@ -123,10 +129,11 @@ func TestGetBoardByNameNotFound(t *testing.T) {
 
 func TestListBoards(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	db.CreateBoard("alpha", "")
-	db.CreateBoard("beta", "")
-	db.CreateBoard("gamma", "")
+	db.CreateBoard("alpha", "", wsID)
+	db.CreateBoard("beta", "", wsID)
+	db.CreateBoard("gamma", "", wsID)
 
 	boards, err := db.ListBoards()
 	if err != nil {
@@ -142,8 +149,9 @@ func TestListBoards(t *testing.T) {
 
 func TestDeleteBoard(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	board, _ := db.CreateBoard("to-delete", "")
+	board, _ := db.CreateBoard("to-delete", "", wsID)
 
 	err := db.DeleteBoard(board.ID)
 	if err != nil {
@@ -158,8 +166,9 @@ func TestDeleteBoard(t *testing.T) {
 
 func TestDeleteBoardCascadesColumns(t *testing.T) {
 	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
 
-	board, _ := db.CreateBoard("cascade-test", "")
+	board, _ := db.CreateBoard("cascade-test", "", wsID)
 
 	columns, _ := db.ListColumns(board.ID)
 	if len(columns) == 0 {

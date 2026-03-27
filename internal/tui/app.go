@@ -10,9 +10,12 @@ type mode int
 
 const (
 	modePicker mode = iota
+	modeWSContent
 	modeBoard
 	modeCardView
 	modeCardEdit
+	modeNotes
+	modeNoteView
 )
 
 type App struct {
@@ -20,10 +23,13 @@ type App struct {
 	boardName string
 	mode      mode
 
-	picker   pickerModel
-	board    boardModel
-	cardView cardViewModel
-	card     cardModel
+	picker    pickerModel
+	wsContent wsContentModel
+	board     boardModel
+	cardView  cardViewModel
+	card      cardModel
+	noteList noteListModel
+	noteView noteViewModel
 
 	width  int
 	height int
@@ -38,7 +44,6 @@ func NewApp(db *store.DB, boardName string) *App {
 }
 
 func (a *App) Init() tea.Cmd {
-	a.picker.autoSelect = true
 	return a.initPicker()
 }
 
@@ -57,12 +62,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch a.mode {
 	case modePicker:
 		return a.updatePicker(msg)
+	case modeWSContent:
+		return a.updateWSContent(msg)
 	case modeBoard:
 		return a.updateBoard(msg)
 	case modeCardView:
 		return a.updateCardView(msg)
 	case modeCardEdit:
 		return a.updateCard(msg)
+	case modeNotes:
+		return a.updateNoteList(msg)
+	case modeNoteView:
+		return a.updateNoteView(msg)
 	}
 
 	return a, nil
@@ -72,12 +83,18 @@ func (a *App) View() string {
 	switch a.mode {
 	case modePicker:
 		return a.viewPicker()
+	case modeWSContent:
+		return a.viewWSContent()
 	case modeBoard:
 		return a.viewBoard()
 	case modeCardView:
 		return a.viewCardReadonly()
 	case modeCardEdit:
 		return a.viewCard()
+	case modeNotes:
+		return a.viewNoteList()
+	case modeNoteView:
+		return a.viewNoteDetail()
 	}
 	return ""
 }

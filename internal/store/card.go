@@ -119,7 +119,7 @@ func (d *DB) UpdateCard(card *model.Card) error {
 	}
 
 	card.UpdatedAt = time.Now().UTC()
-	_, err := d.conn.Exec(
+	result, err := d.conn.Exec(
 		`UPDATE cards SET column_id = ?, title = ?, description = ?, priority = ?,
 		 position = ?, labels = ?, external_id = ?, updated_at = ?
 		 WHERE id = ? AND deleted_at IS NULL`,
@@ -130,12 +130,39 @@ func (d *DB) UpdateCard(card *model.Card) error {
 	if err != nil {
 		return fmt.Errorf("updating card: %w", err)
 	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking update result: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("card not found or deleted")
+	}
 	return nil
 }
 
 func (d *DB) MoveCard(cardID, targetColumnID string) error {
-	var maxPos int
+	// Verify card and target column belong to the same board
+	var cardBoardID, colBoardID string
 	err := d.conn.QueryRow(
+		`SELECT c.board_id FROM columns c
+		 JOIN cards ca ON ca.column_id = c.id
+		 WHERE ca.id = ? AND ca.deleted_at IS NULL`, cardID,
+	).Scan(&cardBoardID)
+	if err != nil {
+		return fmt.Errorf("finding card's board: %w", err)
+	}
+	err = d.conn.QueryRow(
+		"SELECT board_id FROM columns WHERE id = ?", targetColumnID,
+	).Scan(&colBoardID)
+	if err != nil {
+		return fmt.Errorf("finding target column's board: %w", err)
+	}
+	if cardBoardID != colBoardID {
+		return fmt.Errorf("cannot move card across boards")
+	}
+
+	var maxPos int
+	err = d.conn.QueryRow(
 		"SELECT COALESCE(MAX(position), -1) FROM cards WHERE column_id = ? AND deleted_at IS NULL",
 		targetColumnID,
 	).Scan(&maxPos)

@@ -484,3 +484,41 @@ func TestListBoardCardsFilteredNoResults(t *testing.T) {
 		t.Fatalf("expected empty result, got %d cards", len(cards))
 	}
 }
+
+func TestUpdateCardDeletedReturnsError(t *testing.T) {
+	db := testDB(t)
+	_, col := createTestBoardWithColumn(t, db)
+
+	card, _ := db.CreateCard(col.ID, "Will be deleted", model.PriorityMedium)
+	db.DeleteCard(card.ID)
+
+	card.Title = "Updated title"
+	err := db.UpdateCard(card)
+	if err == nil {
+		t.Error("UpdateCard on deleted card should return error")
+	}
+}
+
+func TestMoveCardCrossBoardReturnsError(t *testing.T) {
+	db := testDB(t)
+	wsID := testDefaultWSID(t, db)
+
+	board1, err := db.CreateBoard("Board 1", "", wsID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	board2, err := db.CreateBoard("Board 2", "", wsID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cols1, _ := db.ListColumns(board1.ID)
+	cols2, _ := db.ListColumns(board2.ID)
+
+	card, _ := db.CreateCard(cols1[0].ID, "Card on board 1", model.PriorityMedium)
+
+	err = db.MoveCard(card.ID, cols2[0].ID)
+	if err == nil {
+		t.Error("MoveCard across boards should return error")
+	}
+}

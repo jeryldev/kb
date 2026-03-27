@@ -149,6 +149,9 @@ func (a *App) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "4":
 			a.togglePriorityFilter("low")
 		case "b":
+			if a.wsContent.workspace != nil {
+				return a, a.switchToWSContent(a.wsContent.workspace)
+			}
 			a.mode = modePicker
 			return a, a.initPicker()
 		case "?":
@@ -262,7 +265,8 @@ func (a *App) updateBoardFiltering(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.board.filter = ""
 	case "backspace":
 		if len(a.board.filterInput) > 0 {
-			a.board.filterInput = a.board.filterInput[:len(a.board.filterInput)-1]
+			runes := []rune(a.board.filterInput)
+			a.board.filterInput = string(runes[:len(runes)-1])
 		}
 	default:
 		if len(msg.String()) == 1 {
@@ -593,15 +597,19 @@ func (a *App) viewBoard() string {
 		doneCards = len(a.board.cards[lastCol.ID])
 	}
 
-	titleText := fmt.Sprintf(" kb: %s ", a.board.board.Name)
+	boardLabel := a.board.board.Name
+	if a.wsContent.workspace != nil {
+		boardLabel = a.wsContent.workspace.Name + " > " + a.board.board.Name
+	}
+	titleText := fmt.Sprintf(" kb: %s ", boardLabel)
 	if totalCards > 0 {
 		bar := progressBar(doneCards, totalCards, 10)
 		titleText = fmt.Sprintf(" kb: %s  %s %d/%d ",
-			a.board.board.Name, bar, doneCards, totalCards)
+			boardLabel, bar, doneCards, totalCards)
 	}
 	titleBar := titleBarStyle.Width(w).Render(titleText)
 
-	statusText := " hjkl: navigate   HJKL: move/reorder   n: new   Enter: view   e: edit   d: archive   b: boards   ?: help   q: quit"
+	statusText := " hjkl: navigate   HJKL: move/reorder   n: new   Enter: view   e: edit   d: archive   b: back   ?: help   q: quit"
 	if a.board.moving && a.board.confirming == "" {
 		statusText = fmt.Sprintf(" Moving %q — h/l: column  j/k: position  Enter: confirm  Esc: cancel",
 			truncate(a.board.moveCard.Title, 25))
@@ -821,7 +829,11 @@ func (a *App) viewBoardHelp() string {
 		h = 24
 	}
 
-	titleBar := titleBarStyle.Width(w).Render(fmt.Sprintf(" kb: %s ", a.board.board.Name))
+	helpBoardLabel := a.board.board.Name
+	if a.wsContent.workspace != nil {
+		helpBoardLabel = a.wsContent.workspace.Name + " > " + a.board.board.Name
+	}
+	titleBar := titleBarStyle.Width(w).Render(fmt.Sprintf(" kb: %s ", helpBoardLabel))
 	statusBar := statusBarStyle.Width(w).Render(" Press any key to close help")
 
 	entries := []struct{ key, desc string }{
