@@ -1,6 +1,6 @@
 # kb
 
-A terminal Kanban board for personal project management. Lives in a tmux popup, designed for solo workflows with a data model ready for future sync with Jira, Linear, and GitHub Issues.
+A terminal knowledge management tool for personal projects. Kanban boards, notes with wikilinks, workspace organization, and graph visualization — all in a tmux popup.
 
 ## Install
 
@@ -9,7 +9,7 @@ brew tap jeryldev/tap
 brew install kb
 ```
 
-Or build from source (requires Go 1.25+):
+Or build from source (requires Go 1.24+):
 
 ```bash
 go install github.com/jeryldev/kb@latest
@@ -20,29 +20,106 @@ No external dependencies are required at runtime. The SQLite database is embedde
 ## Quick Start
 
 ```bash
-# Create a board
-kb board create my-project
+# Create a workspace and board
+kb workspace create my-project
+kb board create sprint-1
 
 # Add cards
 kb card add "Fix login bug" -p urgent
 kb card add "Add authentication" -c Todo -p medium
 
+# Create a note with wikilinks
+kb note create "Architecture decisions"
+kb note edit architecture-decisions    # Opens $EDITOR
+
 # Launch TUI
 kb
 ```
 
-## Usage
+## Features
 
-### TUI
+### Kanban Boards
 
-Launch the interactive board with `kb`. It auto-detects which board to open:
+Full kanban board management with columns, cards, priorities, labels, and WIP limits.
+
+### Notes and Wikilinks
+
+Markdown notes with `[[wikilink]]` support. Link notes to each other, to cards (`[[card:Fix login bug]]`), or to boards (`[[board:sprint-1]]`). Backlinks are tracked automatically.
+
+```bash
+kb note create "Meeting notes"
+kb note edit meeting-notes             # Opens $EDITOR
+kb note backlinks meeting-notes        # Show what links to this note
+kb note list --tag design              # Filter by tag
+kb note search "authentication"        # Full-text search
+```
+
+### Workspaces
+
+Organize boards and notes into workspaces using PARA kinds (projects, areas, resources, archives).
+
+```bash
+kb workspace create backend --kind project
+kb workspace board move sprint-1 --workspace backend
+kb workspace note move architecture-decisions --workspace backend
+kb workspace show backend              # Lists boards and notes
+```
+
+### Graph Visualization
+
+Visualize note connections as a force-directed graph in your browser.
+
+```bash
+kb graph                               # Text summary
+kb graph --open                        # Open D3.js visualization in browser
+kb graph --workspace backend           # Scope to workspace
+kb graph --json                        # JSON node/edge data
+```
+
+Note: The HTML visualization loads D3.js from CDN and requires an internet connection.
+
+### Publish to Jekyll
+
+Export notes as Jekyll-compatible blog posts with front matter and resolved wikilinks.
+
+```bash
+kb publish setup my-blog --dir ~/blog/_posts
+kb publish meeting-notes               # Export as Jekyll post
+kb publish meeting-notes --draft       # Export as draft
+kb publish meeting-notes --dry-run     # Preview without writing
+kb publish list                        # Show publish history
+```
+
+Note: Republishing a note creates a new dated file without removing the previous version.
+
+## TUI
+
+Launch the interactive interface with `kb`. It auto-detects which board to open:
 
 1. `$KB_BOARD` environment variable
 2. Tmux session name (strips `dev-` prefix)
 3. Current directory name
-4. Falls back to board picker
+4. Falls back to workspace picker
 
-### Keybindings
+### Workspace Picker
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` | Select workspace |
+| `Enter` | Open workspace |
+| `q` | Quit |
+
+### Workspace Content
+
+| Key | Action |
+|-----|--------|
+| `Tab` | Switch between boards and notes |
+| `n` | Create new board or note |
+| `d` | Delete (with confirmation) |
+| `Enter` | Open selected board or note |
+| `Esc` | Back to workspace picker |
+
+### Board Keybindings
 
 | Key | Action |
 |-----|--------|
@@ -50,7 +127,6 @@ Launch the interactive board with `kb`. It auto-detects which board to open:
 | `j` / `k` | Select card up/down |
 | `H` / `L` | Move card across columns |
 | `J` / `K` | Reorder card within column |
-| | *(then `h/l/j/k` to position, `Enter` to confirm)* |
 | `n` | New card in current column |
 | `Enter` | View card details |
 | `e` | Edit card |
@@ -71,16 +147,6 @@ Launch the interactive board with `kb`. It auto-detects which board to open:
 | `D` | Delete card (with confirmation) |
 | `Esc` / `q` | Back to board |
 
-### Board Picker
-
-| Key | Action |
-|-----|--------|
-| `j` / `k` | Select board |
-| `Enter` | Open board |
-| `n` | Create new board |
-| `d` | Delete board (with confirmation) |
-| `q` | Quit |
-
 ### Card Editor
 
 | Key | Action |
@@ -90,12 +156,41 @@ Launch the interactive board with `kb`. It auto-detects which board to open:
 | `Enter` | Save (from any field except Description) |
 | `Esc` | Cancel |
 
-### CLI Commands
+### Note Browser
 
-All commands support `--json` for machine-readable output (see [AI Tool Integration](#ai-tool-integration)).
+| Key | Action |
+|-----|--------|
+| `j` / `k` | Select note |
+| `/` | Filter notes |
+| `Enter` | View note |
+| `e` | Edit note in external editor |
+| `d` | Delete note (with confirmation) |
+| `Esc` | Back to workspace |
+
+### Note Viewer
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` | Scroll content |
+| `e` | Edit note in external editor |
+| `Esc` / `q` | Back to note list |
+
+## CLI Commands
+
+All commands support `--json` for machine-readable output.
 
 ```bash
-kb                                           # Launch TUI (auto-detect board)
+kb                                           # Launch TUI
+
+# Workspaces
+kb workspaces                                # List workspaces
+kb workspace create <name> [--kind project]  # Create workspace (kinds: project, area, resource, archive)
+kb workspace show <name>                     # Show workspace with boards and notes
+kb workspace edit <name> [--kind area]       # Update workspace
+kb workspace archive <name>                  # Archive workspace
+kb workspace delete <name>                   # Delete (must be empty)
+kb workspace board move <board> -w <ws>      # Move board to workspace
+kb workspace note move <note> -w <ws>        # Move note to workspace
 
 # Boards
 kb boards                                    # List all boards
@@ -117,9 +212,33 @@ kb column add <name>                         # Add column to current board
 kb column delete <name> [-f]                 # Delete column and its cards
 kb column wip-limit <name> <limit>           # Set WIP limit (0 to clear)
 kb column reorder id1,id2,...                # Reorder columns by ID
+
+# Notes
+kb notes                                     # List notes
+kb note create <title> [--tag "design,api"]  # Create note
+kb note show <slug-or-id>                    # Show note content
+kb note edit <slug-or-id>                    # Edit in $EDITOR
+kb note delete <slug-or-id>                  # Delete note
+kb note backlinks <slug-or-id>              # Show backlinks
+kb notes --tag design                        # Filter by tag
+kb notes --search "auth"                     # Search notes
+
+# Graph
+kb graph                                     # Text summary of connections
+kb graph --open                              # Open HTML visualization in browser
+kb graph --workspace <name>                  # Scope to workspace
+kb graph --json                              # JSON node/edge data
+
+# Publish
+kb publish <slug> [--target name]            # Publish note as Jekyll post
+kb publish <slug> --draft                    # Publish as draft
+kb publish <slug> --dry-run                  # Preview without writing
+kb publish setup <name> --dir <path>         # Create publish target
+kb publish list                              # Show targets and publish log
+kb publish delete <target-name>              # Remove publish target
 ```
 
-Card IDs can be abbreviated to the first 4+ unique characters. Column names are case-insensitive.
+Card IDs and note slugs can be abbreviated to the first 4+ unique characters. Column and workspace names are case-insensitive.
 
 ### Flags Reference
 
@@ -133,6 +252,14 @@ Card IDs can be abbreviated to the first 4+ unique characters. Column names are 
 | `--labels` | `-l` | card add, card edit | Comma-separated labels |
 | `--external-id` | `-e` | card add, card edit | External system ID (Jira, GitHub, etc.) |
 | `--force` | `-f` | board delete, column delete | Skip confirmation prompt |
+| `--kind` | `-k` | workspace create, workspace edit | PARA kind: project, area, resource, archive |
+| `--workspace` | `-w` | workspace board move, workspace note move | Target workspace |
+| `--tag` | | note create, notes list | Comma-separated tags |
+| `--search` | | notes list | Search note titles and bodies |
+| `--target` | | publish | Publish target name |
+| `--draft` | | publish | Publish as draft |
+| `--dry-run` | | publish | Preview without writing files |
+| `--open` | | graph | Open visualization in browser |
 
 ## AI Tool Integration
 
@@ -141,30 +268,27 @@ All CLI commands support `--json` for structured output, making kb scriptable by
 ```bash
 # List boards
 kb boards --json
-# [{"id":"...","name":"my-project","description":"","created_at":"...","updated_at":"..."}]
 
 # Create a card with all fields
 kb card add "Fix auth bug" -p urgent -l "bug,security" -e "GH-42" --json
-# {"id":"...","column":"Backlog","title":"Fix auth bug","priority":"urgent","labels":"bug,security",...}
-
-# Edit specific fields (only changed fields are updated)
-kb card edit abc1 --priority high --labels "bug" --json
-
-# Move card and get updated state
-kb card move abc1 "In Progress" --json
-
-# Check column WIP limits
-kb columns --json
-# [{"id":"...","name":"In Progress","position":2,"wip_limit":3,"cards":2},...]
-
-# Set WIP limit
-kb column wip-limit "In Progress" 5 --json
 
 # Pipeline example: list all urgent cards
 kb cards --json | jq '[.[] | select(.priority == "urgent")]'
+
+# Note operations
+kb note create "Sprint retro" --tag "retro,sprint-3" --json
+kb note backlinks sprint-retro --json
 ```
 
 In `--json` mode, destructive commands (delete) skip interactive confirmation prompts, making them safe for non-interactive use.
+
+## Migrating from v0.1.x
+
+If you are upgrading from v0.1.x (kanban-only):
+
+- A "Default" workspace is automatically created and all existing boards are assigned to it
+- No data is lost — boards and cards work exactly as before
+- New features (notes, workspaces, graph, publish) are opt-in
 
 ## Tmux Integration
 
@@ -175,6 +299,13 @@ With [dev-session-manager](https://github.com/jeryldev/dev-session-manager), pre
 Data is stored at `~/.local/share/kb/kb.db` (SQLite). Override with `$XDG_DATA_HOME`.
 
 Default columns on board creation: Backlog, Todo, In Progress, Review, Done.
+
+## Known Limitations
+
+- Graph visualization requires internet (D3.js loaded from CDN)
+- Publish only supports Jekyll engine currently
+- Republishing a note creates a new file without cleaning up the previous version
+- Archived workspaces remain visible in list commands (no `--active` filter yet)
 
 ## Dependencies
 
