@@ -291,8 +291,11 @@ var cardArchiveCmd = &cobra.Command{
 		}
 
 		if jsonOutput {
-			card.ArchivedAt = &card.UpdatedAt
-			return printJSON(toCardJSON(card, colName))
+			archived, err := db.GetCard(cardID)
+			if err != nil {
+				return fmt.Errorf("fetching archived card: %w", err)
+			}
+			return printJSON(toCardJSON(archived, colName))
 		}
 
 		fmt.Fprintln(cmd.OutOrStdout(), "Card archived")

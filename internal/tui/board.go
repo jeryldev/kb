@@ -265,7 +265,8 @@ func (a *App) updateBoardFiltering(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.board.filter = ""
 	case "backspace":
 		if len(a.board.filterInput) > 0 {
-			a.board.filterInput = a.board.filterInput[:len(a.board.filterInput)-1]
+			runes := []rune(a.board.filterInput)
+			a.board.filterInput = string(runes[:len(runes)-1])
 		}
 	default:
 		if len(msg.String()) == 1 {

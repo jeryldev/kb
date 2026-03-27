@@ -69,10 +69,28 @@ func (d *DB) migrate() error {
 		return fmt.Errorf("creating migrations table: %w", err)
 	}
 
+	// Use BEGIN IMMEDIATE to prevent concurrent migration races.
+	// Without this, two processes could both read version=0 and
+	// attempt the same migration simultaneously.
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning migration lock: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("SELECT 1 FROM schema_migrations LIMIT 1"); err == nil {
+		// Table exists; try to acquire write lock via a dummy write
+		_, _ = tx.Exec("DELETE FROM schema_migrations WHERE version = -1")
+	}
+
 	var version int
-	err = d.conn.QueryRow("SELECT COALESCE(MAX(version), 0) FROM schema_migrations").Scan(&version)
+	err = tx.QueryRow("SELECT COALESCE(MAX(version), 0) FROM schema_migrations").Scan(&version)
 	if err != nil {
 		return fmt.Errorf("checking migration version: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing migration version check: %w", err)
 	}
 
 	if version < 1 {

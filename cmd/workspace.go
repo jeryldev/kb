@@ -208,6 +208,22 @@ var workspaceDeleteCmd = &cobra.Command{
 			return err
 		}
 
+		boards, err := db.ListBoardsByWorkspace(ws.ID)
+		if err != nil {
+			return fmt.Errorf("checking workspace boards: %w", err)
+		}
+		if len(boards) > 0 {
+			return fmt.Errorf("cannot delete workspace %q: it has %d board(s); move or delete them first", ws.Name, len(boards))
+		}
+
+		notes, err := db.ListNotesByWorkspace(ws.ID)
+		if err != nil {
+			return fmt.Errorf("checking workspace notes: %w", err)
+		}
+		if len(notes) > 0 {
+			return fmt.Errorf("cannot delete workspace %q: it has %d note(s); move or delete them first", ws.Name, len(notes))
+		}
+
 		if err := db.DeleteWorkspace(ws.ID); err != nil {
 			return err
 		}

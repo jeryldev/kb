@@ -136,7 +136,8 @@ func (a *App) updateNoteListFiltering(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.noteList.cursor = 0
 	case "backspace":
 		if len(a.noteList.filterInput) > 0 {
-			a.noteList.filterInput = a.noteList.filterInput[:len(a.noteList.filterInput)-1]
+			runes := []rune(a.noteList.filterInput)
+			a.noteList.filterInput = string(runes[:len(runes)-1])
 		}
 	default:
 		if len(msg.String()) == 1 {
@@ -408,6 +409,9 @@ func (a *App) editNoteExternal() tea.Cmd {
 		current.Body = string(data)
 		if err := db.UpdateNote(current); err != nil {
 			return errMsg{err}
+		}
+		if err := db.SyncNoteLinks(current); err != nil {
+			return errMsg{fmt.Errorf("syncing note links: %w", err)}
 		}
 		return noteEditedMsg{note: current}
 	})

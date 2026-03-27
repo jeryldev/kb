@@ -336,7 +336,8 @@ func (a *App) updateWSContentCreating(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.wsContent.creating = ""
 	case "backspace":
 		if len(a.wsContent.input) > 0 {
-			a.wsContent.input = a.wsContent.input[:len(a.wsContent.input)-1]
+			runes := []rune(a.wsContent.input)
+			a.wsContent.input = string(runes[:len(runes)-1])
 		}
 	default:
 		if len(msg.String()) == 1 {
