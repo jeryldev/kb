@@ -3,3 +3,4 @@ dist/
 *.db
 .DS_Store
 .research/
+firebase-debug.log
