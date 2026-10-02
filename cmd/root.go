@@ -34,7 +34,13 @@ var rootCmd = &cobra.Command{
 Everything is a file in your vault folder ($KB_VAULT, default ~/notes):
 notes are Markdown, boards are Markdown in the Obsidian Kanban plugin's
 format, and workspaces are listed in .kb/workspaces.yml. Run kb alone for
-the TUI.`,
+the TUI.
+
+Card and column commands work on the current board: --board, else
+$KB_BOARD, else the board named after the folder you are in or after its
+git repository (worktrees included).
+
+Upgrading from kb 0.3? Run kb import once.`,
 	// Usage is for mistakes in how a command was typed, not for errors
 	// such as a note that does not exist.
 	SilenceUsage: true,
@@ -111,7 +117,7 @@ func versionString() string {
 func init() {
 	rootCmd.Version = versionString()
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
-	rootCmd.PersistentFlags().StringVarP(&boardFlag, "board", "B", "", "Board to use (default: $KB_BOARD, the dev tmux session, or the folder name)")
+	rootCmd.PersistentFlags().StringVarP(&boardFlag, "board", "B", "", "Board to use (default: $KB_BOARD, else the board named after the folder or its git repository)")
 }
 
 // boardCandidates are the boards the user may mean, in order: --board,

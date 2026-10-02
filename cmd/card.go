@@ -14,7 +14,12 @@ var cardCmd = &cobra.Command{
 	Use:     "cards",
 	Aliases: []string{"card"},
 	Short:   "Manage the current board's cards",
-	Args:    cobra.NoArgs,
+	Long: `Manage the current board's cards (see kb --help for which board that is).
+
+A card is named by its id, the ^id at the end of its line in the board's
+file, or by the first 4 or more characters of it. A card that is not on
+the current board is looked for on every board.`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		board, err := currentBoard()
 		if err != nil {
