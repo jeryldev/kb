@@ -10,7 +10,7 @@ import (
 func TestPublishTargetsAreMachineLocal(t *testing.T) {
 	s := testStore(t)
 	site := t.TempDir()
-	tgt, err := s.CreatePublishTarget("blog", "jekyll", site, "", "")
+	tgt, err := s.CreatePublishTarget("blog", "jekyll", site, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,14 +20,14 @@ func TestPublishTargetsAreMachineLocal(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(s.Vault().Root(), ".kb", "publish.yml")); err == nil {
 		t.Error("targets must not be written into the synced vault")
 	}
-	if _, err := s.CreatePublishTarget("blog", "jekyll", site, "", ""); err == nil {
+	if _, err := s.CreatePublishTarget("blog", "jekyll", site, "", "", ""); err == nil {
 		t.Error("a duplicate target name should be refused")
 	}
-	if _, err := s.CreatePublishTarget("rel", "jekyll", "./site", "", ""); err == nil {
+	if _, err := s.CreatePublishTarget("rel", "jekyll", "./site", "", "", ""); err == nil {
 		t.Error("a relative site path should be refused")
 	}
 	home, _ := os.UserHomeDir()
-	if got, err := s.CreatePublishTarget("home", "jekyll", "~/kb-test-site", "", ""); err != nil || got.BasePath != filepath.Join(home, "kb-test-site") {
+	if got, err := s.CreatePublishTarget("home", "jekyll", "~/kb-test-site", "", "", ""); err != nil || got.BasePath != filepath.Join(home, "kb-test-site") {
 		t.Errorf("~ not expanded: %+v %v", got, err)
 	}
 	if again := sibling(t, s).ListPublishTargets(); len(again) != 2 {

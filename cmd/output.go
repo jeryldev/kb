@@ -73,6 +73,7 @@ type publishTargetJSON struct {
 	Engine    string `json:"engine"`
 	BasePath  string `json:"base_path"`
 	PostsDir  string `json:"posts_dir"`
+	Permalink string `json:"permalink"`
 	Workspace string `json:"workspace"`
 }
 
@@ -159,7 +160,7 @@ func toNoteJSON(n *model.Note) noteJSON {
 }
 
 func toPublishTargetJSON(pt *model.PublishTarget) publishTargetJSON {
-	out := publishTargetJSON{Name: pt.Name, Engine: string(pt.Engine), BasePath: pt.BasePath, PostsDir: pt.PostsDir}
+	out := publishTargetJSON{Name: pt.Name, Engine: string(pt.Engine), BasePath: pt.BasePath, PostsDir: pt.PostsDir, Permalink: pt.Permalink}
 	if pt.WorkspaceID != nil {
 		out.Workspace = workspaceName(*pt.WorkspaceID)
 	}

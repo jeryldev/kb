@@ -19,7 +19,10 @@ var publishCmd = &cobra.Command{
 
 Where each note was published is kept in its frontmatter (published:), so
 publishing again updates the same post. Sites are machine-local settings,
-kept in ~/.config/kb/publish.yml.`,
+kept in ~/.config/kb/publish.yml.
+
+A note named like a subcommand (list, setup, delete) goes after --:
+  kb publish -- list`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		note, err := resolveNote(args[0])
@@ -56,7 +59,7 @@ kept in ~/.config/kb/publish.yml.`,
 			if post.Draft {
 				continue
 			}
-			if permalink, ok := publish.PermalinkFromPostPath(post.Path); ok {
+			if permalink, ok := publish.PermalinkFor(target.Permalink, post.Path); ok {
 				permalinks[noteID] = permalink
 			}
 		}
@@ -123,7 +126,8 @@ var publishSetupCmd = &cobra.Command{
 			}
 			wsID = ws.ID
 		}
-		pt, err := db.CreatePublishTarget(args[0], engine, basePath, postsDir, wsID)
+		permalink, _ := cmd.Flags().GetString("permalink")
+		pt, err := db.CreatePublishTarget(args[0], engine, basePath, postsDir, permalink, wsID)
 		if err != nil {
 			return err
 		}
@@ -246,6 +250,7 @@ func init() {
 	publishSetupCmd.Flags().StringP("path", "p", "", "The site's folder (absolute, or starting with ~/)")
 	publishSetupCmd.Flags().String("posts-dir", "_posts", "Posts folder within the site")
 	publishSetupCmd.Flags().StringP("workspace", "w", "", "Workspace the target is for")
+	publishSetupCmd.Flags().String("permalink", "", "The site's permalink pattern, for links between posts (default "+publish.DefaultPermalink+")")
 
 	publishListCmd.Flags().StringP("target", "t", "", "List this target's posts")
 

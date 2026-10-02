@@ -40,7 +40,7 @@ func (s *Store) readTargets() []targetYAML {
 func (s *Store) ListPublishTargets() []*model.PublishTarget {
 	var out []*model.PublishTarget
 	for _, t := range s.readTargets() {
-		pt := &model.PublishTarget{ID: t.Name, Name: t.Name, Engine: model.Engine(t.Engine), BasePath: t.Path, PostsDir: t.PostsDir}
+		pt := &model.PublishTarget{ID: t.Name, Name: t.Name, Engine: model.Engine(t.Engine), BasePath: t.Path, PostsDir: t.PostsDir, Permalink: t.Permalink}
 		if t.Workspace != "" {
 			id := s.workspaceIDForName(t.Workspace)
 			pt.WorkspaceID = &id
@@ -72,7 +72,7 @@ func (s *Store) writeTargets(list []targetYAML) error {
 // CreatePublishTarget adds a site to publish to. Its path must be absolute
 // (or start with ~/), so posts never land somewhere that depends on the
 // folder kb was run from.
-func (s *Store) CreatePublishTarget(name string, engine model.Engine, sitePath, postsDir, workspaceID string) (*model.PublishTarget, error) {
+func (s *Store) CreatePublishTarget(name string, engine model.Engine, sitePath, postsDir, permalink, workspaceID string) (*model.PublishTarget, error) {
 	if strings.TrimSpace(name) == "" {
 		return nil, fmt.Errorf("a publish target needs a name")
 	}
@@ -98,7 +98,7 @@ func (s *Store) CreatePublishTarget(name string, engine model.Engine, sitePath, 
 			return nil, fmt.Errorf("publish target %q already exists", name)
 		}
 	}
-	list = append(list, targetYAML{Name: name, Engine: string(engine), Path: filepath.Clean(sitePath), PostsDir: postsDir, Workspace: s.workspaceNameForFile(workspaceID)})
+	list = append(list, targetYAML{Name: name, Engine: string(engine), Path: filepath.Clean(sitePath), PostsDir: postsDir, Permalink: permalink, Workspace: s.workspaceNameForFile(workspaceID)})
 	if err := s.writeTargets(list); err != nil {
 		return nil, err
 	}

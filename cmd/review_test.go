@@ -389,6 +389,35 @@ INSERT INTO cards (id, column_id, title, labels, priority, position) VALUES ('01
 	}
 }
 
+func TestASitesPermalinkPatternShapesLinksBetweenPosts(t *testing.T) { // C11
+	setupTestDB(t)
+	site := t.TempDir()
+	executeCmd(t, "publish", "setup", "site", "--path", site, "--permalink", "/posts/:title/")
+	executeCmd(t, "notes", "create", "First", "--body", "one")
+	executeCmd(t, "notes", "create", "Second", "--body", "see [[First]]")
+	executeCmd(t, "publish", "first")
+	executeCmd(t, "publish", "second")
+	posts, _ := filepath.Glob(filepath.Join(site, "_posts", "*second.md"))
+	if len(posts) != 1 {
+		t.Fatalf("posts = %v", posts)
+	}
+	data, _ := os.ReadFile(posts[0])
+	if !strings.Contains(string(data), "[First](/posts/first/)") {
+		t.Errorf("post:\n%s", data)
+	}
+}
+
+func TestANoteNamedLikeASubcommandCanBePublished(t *testing.T) { // C25
+	setupTestDB(t)
+	site := t.TempDir()
+	executeCmd(t, "publish", "setup", "site", "--path", site)
+	executeCmd(t, "notes", "create", "List", "--body", "a list")
+	out := executeCmd(t, "publish", "--", "list")
+	if !strings.Contains(out, `Published "List"`) {
+		t.Errorf("output: %s", out)
+	}
+}
+
 // A note whose frontmatter is broken can still be found and deleted, and
 // an edit says what to fix rather than overwrite it (A11).
 func TestANoteWithBrokenFrontmatter(t *testing.T) {

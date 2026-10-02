@@ -455,7 +455,7 @@ func (p *Plan) Apply(s *fstore.Store) error {
 		if err != nil {
 			return fmt.Errorf("publish target %s: %w", t.name, err)
 		}
-		if _, err := s.CreatePublishTarget(t.name, engine, t.basePath, t.postsDir, wsID(t.workspace)); err != nil {
+		if _, err := s.CreatePublishTarget(t.name, engine, t.basePath, t.postsDir, "", wsID(t.workspace)); err != nil {
 			return fmt.Errorf("publish target %s: %w", t.name, err)
 		}
 	}
