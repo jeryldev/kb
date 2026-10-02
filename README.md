@@ -124,11 +124,13 @@ Launch the interactive interface with `kb`. It auto-detects which board to open:
 
 | Key | Action |
 |-----|--------|
-| `Tab` | Switch between boards and notes |
-| `n` | Create new board or note |
-| `d` | Delete (with confirmation) |
+| `j` / `k` | Select a board or note |
 | `Enter` | Open selected board or note |
-| `Esc` | Back to workspace picker |
+| `n` | New board |
+| `N` | New note |
+| `d` | Delete (with confirmation) |
+| `b` | Back to workspace picker |
+| `q` | Quit |
 
 ### Board Keybindings
 

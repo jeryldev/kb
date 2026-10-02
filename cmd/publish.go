@@ -152,7 +152,7 @@ var publishSetupCmd = &cobra.Command{
 
 var publishListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List publish targets and recent publications",
+	Short: "List publish targets, or a target's publications with --target",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		targetName, _ := cmd.Flags().GetString("target")
 
