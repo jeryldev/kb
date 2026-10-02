@@ -2,6 +2,8 @@
 
 A terminal knowledge management tool for personal projects. Kanban boards, notes with wikilinks, workspace organization, and graph visualization — all in a tmux popup.
 
+Notes are plain Markdown files in a folder you own (the vault), named by their titles, with YAML frontmatter, so they also open in any editor, in git, or in Obsidian on your phone. kb keeps a search and link index beside them that it can always rebuild from the files.
+
 ## Install
 
 ```bash
@@ -15,7 +17,7 @@ Or build from source (requires Go 1.24+):
 go install github.com/jeryldev/kb@latest
 ```
 
-No external dependencies are required at runtime. The SQLite database is embedded via a pure-Go driver ([modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite)) — no CGo or system libraries needed.
+No external dependencies are required at runtime. The SQLite index is embedded via a pure-Go driver ([modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite)) — no CGo or system libraries needed.
 
 ## Quick Start
 
@@ -28,9 +30,10 @@ kb board create sprint-1
 kb card add "Fix login bug" -p urgent
 kb card add "Add authentication" -c Todo -p medium
 
-# Create a note with wikilinks
+# Write notes
+kb daily                               # Today's daily note in $EDITOR
 kb note create "Architecture decisions"
-kb note edit architecture-decisions    # Opens $EDITOR
+kb open "architecture decisions"       # Open any note by name in $EDITOR
 
 # Launch TUI
 kb
@@ -44,15 +47,23 @@ Full kanban board management with columns, cards, priorities, labels, and WIP li
 
 ### Notes and Wikilinks
 
-Markdown notes with `[[wikilink]]` support. Link notes to each other, to cards (`[[card:Fix login bug]]`), or to boards (`[[board:sprint-1]]`). Backlinks are tracked automatically.
+Each note is a Markdown file in the vault (`$KB_VAULT`, default `~/notes`), named by its title, like `Meeting notes.md`. Edit the files with any editor, sync tool or app: kb rescans the vault every time it starts and picks up new, changed, moved and deleted files. A file with no frontmatter is a note too, so an existing Obsidian vault works as is, and kb never rewrites a file just by reading it.
+
+Links work the way Obsidian reads them. `[[Meeting notes]]`, `[[meeting notes]]`, `[[folder/Meeting notes]]`, `[[Meeting notes#Decisions]]`, `[[Meeting notes|the meeting]]` and an alias from the note's `aliases:` all resolve to the same note, and a link to a note that does not exist yet starts working when you create it. Link to cards with `[[card:Fix login bug]]` and boards with `[[board:sprint-1]]`. Backlinks are tracked automatically.
 
 ```bash
-kb note create "Meeting notes"
-kb note edit meeting-notes             # Opens $EDITOR
+kb daily                               # Open (or start) today's daily note
+kb daily --date 2026-10-01             # Another day's
+kb open "meeting notes"                # Open a note by title, alias, file name or slug
+kb note rename meeting-notes "Q4 kickoff"   # Rename the file and rewrite links to it
 kb note backlinks meeting-notes        # Show what links to this note
-kb note list --tag design              # Filter by tag
-kb note search "authentication"        # Full-text search
+kb note search "authentication flow"   # Every word, as a prefix, best match first
+kb notes --tag design                  # Filter by tag
+kb tags                                # Tags, most used first
+kb index                               # What the last scan found; --rebuild re-reads all
 ```
+
+Frontmatter kb understands: `title` (when it differs from the file name), `tags`, `aliases`, `pinned`, `workspace`, `created` and `archived`. Other keys are kept untouched when kb edits a note.
 
 ### Workspaces
 
@@ -83,14 +94,14 @@ Note: The HTML visualization loads D3.js from CDN and requires an internet conne
 Export notes as Jekyll-compatible blog posts with front matter and resolved wikilinks.
 
 ```bash
-kb publish setup my-blog --dir ~/blog/_posts
+kb publish setup my-blog --path ~/blog      # posts go in ~/blog/_posts (--posts-dir)
 kb publish meeting-notes               # Export as Jekyll post
 kb publish meeting-notes --draft       # Export as draft
 kb publish meeting-notes --dry-run     # Preview without writing
 kb publish list                        # Show publish history
 ```
 
-Note: Republishing a note creates a new dated file without removing the previous version.
+A post is dated by the day its note was written (`created:`, on your local calendar), and publishing a note again updates the same post. Links to other notes become links to their posts when those are published and not drafts; otherwise they become plain text.
 
 ## TUI
 
@@ -163,7 +174,7 @@ Launch the interactive interface with `kb`. It auto-detects which board to open:
 | `j` / `k` | Select note |
 | `/` | Filter notes |
 | `Enter` | View note |
-| `e` | Edit note in external editor |
+| `e` | Edit the note's file in `$VISUAL` / `$EDITOR` |
 | `d` | Delete note (with confirmation) |
 | `Esc` | Back to workspace |
 
@@ -172,7 +183,7 @@ Launch the interactive interface with `kb`. It auto-detects which board to open:
 | Key | Action |
 |-----|--------|
 | `j` / `k` | Scroll content |
-| `e` | Edit note in external editor |
+| `e` | Edit the note's file in `$VISUAL` / `$EDITOR`; kb reloads it when you quit the editor |
 | `Esc` / `q` | Back to note list |
 
 ## CLI Commands
@@ -213,15 +224,20 @@ kb column delete <name> [-f]                 # Delete column and its cards
 kb column wip-limit <name> <limit>           # Set WIP limit (0 to clear)
 kb column reorder id1,id2,...                # Reorder columns by ID
 
-# Notes
+# Notes (a <note> can be its title, alias, file name, slug or id)
 kb notes                                     # List notes
-kb note create <title> [--tag "design,api"]  # Create note
-kb note show <slug-or-id>                    # Show note content
-kb note edit <slug-or-id>                    # Edit in $EDITOR
-kb note delete <slug-or-id>                  # Delete note
-kb note backlinks <slug-or-id>              # Show backlinks
+kb note create <title> [--tags "design,api"] # Create note (file: "<title>.md")
+kb note show <note>                          # Show note content
+kb note edit <note> --title/--body/--tags    # Change fields
+kb note rename <note> <new title>            # Rename file, rewrite links
+kb note delete <note>                        # Delete note and its file
+kb note backlinks <note>                     # Show backlinks
+kb note search <words...>                    # Full-text search
 kb notes --tag design                        # Filter by tag
-kb notes --search "auth"                     # Search notes
+kb open <note>                               # Edit the file in $EDITOR
+kb daily [--date YYYY-MM-DD]                 # Daily note in $KB_DAILY_DIR (default daily/)
+kb tags                                      # Tag counts
+kb index [--rebuild]                         # Rescan the vault
 
 # Graph
 kb graph                                     # Text summary of connections
@@ -233,7 +249,7 @@ kb graph --json                              # JSON node/edge data
 kb publish <slug> [--target name]            # Publish note as Jekyll post
 kb publish <slug> --draft                    # Publish as draft
 kb publish <slug> --dry-run                  # Preview without writing
-kb publish setup <name> --dir <path>         # Create publish target
+kb publish setup <name> --path <site> [--posts-dir _posts]  # Create publish target
 kb publish list                              # Show targets and publish log
 kb publish delete <target-name>              # Remove publish target
 ```
@@ -282,6 +298,10 @@ kb note backlinks sprint-retro --json
 
 In `--json` mode, destructive commands (delete) skip interactive confirmation prompts, making them safe for non-interactive use.
 
+## Migrating from v0.2.x
+
+Notes used to live only inside the SQLite database. The first time kb 0.3 runs, it writes each of them out as a Markdown file in the vault (keeping its id, tags and dates) and from then on reads the files. Set `KB_VAULT` before that first run if you want them somewhere other than `~/notes`. Boards and cards are unchanged.
+
 ## Migrating from v0.1.x
 
 If you are upgrading from v0.1.x (kanban-only):
@@ -296,7 +316,9 @@ With [dev-session-manager](https://github.com/jeryldev/dev-session-manager), pre
 
 ## Data
 
-Data is stored at `~/.local/share/kb/kb.db` (SQLite). Override with `$XDG_DATA_HOME`.
+Notes are the Markdown files in the vault: `$KB_VAULT`, default `~/notes`. Daily notes go in `$KB_DAILY_DIR` inside it, default `daily`.
+
+Boards, cards and workspaces, plus the note index (search, links, tags), are in `~/.local/share/kb/kb.db` (SQLite; override with `$XDG_DATA_HOME`). Keep it out of a synced folder; deleting it loses no notes, though the index has to be rebuilt and boards and cards live only there.
 
 Default columns on board creation: Backlog, Todo, In Progress, Review, Done.
 
@@ -304,7 +326,6 @@ Default columns on board creation: Backlog, Todo, In Progress, Review, Done.
 
 - Graph visualization requires internet (D3.js loaded from CDN)
 - Publish only supports Jekyll engine currently
-- Republishing a note creates a new file without cleaning up the previous version
 - Archived workspaces remain visible in list commands (no `--active` filter yet)
 
 ## Dependencies
