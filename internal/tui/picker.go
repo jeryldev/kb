@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/jeryldev/kb/internal/model"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -504,6 +505,11 @@ func (a *App) viewWSContent() string {
 		rows = append(rows, helpStyle.Render(a.wsContent.feedback))
 	}
 
+	// One long row would widen the whole view past the terminal, title bar
+	// and all, so each row is cut to the space inside the padding.
+	for i, row := range rows {
+		rows[i] = ansi.Truncate(row, max(1, w-4), "…")
+	}
 	content := lipgloss.JoinVertical(lipgloss.Left, rows...)
 	padded := lipgloss.NewStyle().Padding(1, 2).Height(contentHeight).Render(content)
 	return lipgloss.JoinVertical(lipgloss.Left, titleBar, padded, statusBar)

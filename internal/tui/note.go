@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/jeryldev/kb/internal/editor"
 	"github.com/jeryldev/kb/internal/model"
 
@@ -226,9 +227,7 @@ func (a *App) viewNoteList() string {
 		title := style.Render(n.Title)
 		line := fmt.Sprintf("%s%s  %s%s  %s", cursor, title, slug, tags, updated)
 
-		if len(line) > w {
-			line = line[:w]
-		}
+		line = ansi.Truncate(line, w, "…")
 		rows = append(rows, line)
 	}
 
