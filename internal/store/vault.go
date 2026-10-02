@@ -175,6 +175,9 @@ func (d *DB) Scan() (ScanResult, error) {
 			return res, err
 		}
 	}
+	if err := resolveLinks(tx); err != nil {
+		return res, err
+	}
 
 	if err := tx.Commit(); err != nil {
 		return res, fmt.Errorf("committing scan: %w", err)
@@ -198,6 +201,9 @@ func (d *DB) indexOne(entry vault.Entry, doc *vault.Doc) (*model.Note, error) {
 		return nil, err
 	}
 	if err := syncLinksTx(tx, note); err != nil {
+		return nil, err
+	}
+	if err := resolveLinks(tx); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -252,6 +258,14 @@ func upsertNote(tx *sql.Tx, f *scannedFile) (*model.Note, error) {
 	if err != nil {
 		return nil, fmt.Errorf("indexing %s: %w", entry.Path, err)
 	}
+	if _, err := tx.Exec("DELETE FROM note_aliases WHERE note_id = ?", note.ID); err != nil {
+		return nil, fmt.Errorf("indexing %s: %w", entry.Path, err)
+	}
+	for _, alias := range doc.Aliases() {
+		if _, err := tx.Exec("INSERT INTO note_aliases (note_id, alias) VALUES (?, ?)", note.ID, alias); err != nil {
+			return nil, fmt.Errorf("indexing %s: %w", entry.Path, err)
+		}
+	}
 	return note, nil
 }
 
@@ -298,6 +312,7 @@ func removeNoteRows(tx *sql.Tx, id string) error {
 	for _, stmt := range []string{
 		"DELETE FROM links WHERE source_type = 'note' AND source_id = ?",
 		"DELETE FROM publish_log WHERE note_id = ?",
+		"DELETE FROM note_aliases WHERE note_id = ?",
 		"DELETE FROM notes WHERE id = ?",
 	} {
 		if _, err := tx.Exec(stmt, id); err != nil {
@@ -442,4 +457,19 @@ func (d *DB) rewriteWorkspaceInFiles(workspaceID string) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// Rebuild re-reads every file in the vault, as if each had just changed.
+// Note ids, and so links and publish history, are kept.
+// The search index is refilled too, in case its rowids drifted from the
+// notes' (see migrate007).
+func (d *DB) Rebuild() (ScanResult, error) {
+	if _, err := d.conn.Exec(`
+		UPDATE notes SET mtime = 0;
+		DELETE FROM notes_fts;
+		INSERT INTO notes_fts (rowid, id, title, body, tags) SELECT rowid, id, title, body, tags FROM notes;
+	`); err != nil {
+		return ScanResult{}, fmt.Errorf("resetting index: %w", err)
+	}
+	return d.Scan()
 }

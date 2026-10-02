@@ -8,6 +8,7 @@ import (
 	"path"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/jeryldev/kb/internal/model"
@@ -90,19 +91,40 @@ func (d *DB) ListNotes() ([]*model.Note, error) {
 	return scanNotes(rows)
 }
 
+// SearchNotes finds notes containing every word of the query, each as a
+// word prefix, ignoring case and accents, best match first.
 func (d *DB) SearchNotes(query string) ([]*model.Note, error) {
-	search := "%" + strings.ToLower(query) + "%"
+	match := ftsQuery(query)
+	if match == "" {
+		return nil, nil
+	}
 	rows, err := d.conn.Query(
-		`SELECT `+noteColumns+` FROM notes WHERE archived_at IS NULL
-		 AND (LOWER(title) LIKE ? OR LOWER(body) LIKE ? OR LOWER(tags) LIKE ?)
-		 ORDER BY updated_at DESC`,
-		search, search, search,
+		`SELECT `+qualifiedNoteColumns+` FROM notes n
+		 JOIN (SELECT id, bm25(notes_fts) AS rank FROM notes_fts WHERE notes_fts MATCH ?) f ON f.id = n.id
+		 WHERE n.archived_at IS NULL
+		 ORDER BY f.rank`,
+		match,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("searching notes: %w", err)
 	}
 	defer rows.Close()
 	return scanNotes(rows)
+}
+
+var qualifiedNoteColumns = "n." + strings.ReplaceAll(noteColumns, ", ", ", n.")
+
+// ftsQuery turns free text into an FTS5 query of quoted prefix terms, so
+// that FTS syntax in the input (quotes, OR, -, parentheses) is just text.
+func ftsQuery(query string) string {
+	words := strings.FieldsFunc(query, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	terms := make([]string, len(words))
+	for i, w := range words {
+		terms[i] = `"` + w + `"*`
+	}
+	return strings.Join(terms, " ")
 }
 
 func (d *DB) ListNotesByWorkspace(workspaceID string) ([]*model.Note, error) {
@@ -245,6 +267,9 @@ func (d *DB) DeleteNote(id string) error {
 	}
 	defer tx.Rollback()
 	if err := removeNoteRows(tx, id); err != nil {
+		return err
+	}
+	if err := resolveLinks(tx); err != nil {
 		return err
 	}
 	return tx.Commit()

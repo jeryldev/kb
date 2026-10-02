@@ -2428,3 +2428,18 @@ func TestGraphWorkspaceNotFound(t *testing.T) {
 		t.Error("expected error for nonexistent workspace")
 	}
 }
+
+func TestIndexReportsTheVaultAndRebuilds(t *testing.T) {
+	setupTestDB(t)
+	executeCmd(t, "notes", "create", "Indexed", "--json")
+	os.WriteFile(filepath.Join(db.Vault().Root(), "dropped.md"), []byte("from another editor"), 0o644)
+
+	out := executeCmd(t, "index")
+	if !strings.Contains(out, db.Vault().Root()) || !strings.Contains(out, "1 added") || !strings.Contains(out, "2 notes") {
+		t.Errorf("index output:\n%s", out)
+	}
+	out = executeCmd(t, "index", "--rebuild")
+	if !strings.Contains(out, "2 updated") {
+		t.Errorf("rebuild output:\n%s", out)
+	}
+}

@@ -16,8 +16,8 @@ import (
 type DB struct {
 	conn  *sql.DB
 	vault *vault.Vault
-	// problems from the scan on open, for the caller to report.
-	problems []string
+	// opened is what the scan on open found, for the caller to report.
+	opened ScanResult
 }
 
 // Open opens the index at the default location over the vault named by
@@ -66,7 +66,7 @@ func OpenWithPath(path, vaultDir string) (*DB, error) {
 		conn.Close()
 		return nil, fmt.Errorf("scanning the vault: %w", err)
 	}
-	db.problems = res.Problems
+	db.opened = res
 
 	return db, nil
 }
@@ -77,7 +77,12 @@ func (d *DB) Vault() *vault.Vault {
 
 // Problems lists files the scan on open could only partly read.
 func (d *DB) Problems() []string {
-	return d.problems
+	return d.opened.Problems
+}
+
+// OpenScan is what the scan on open changed in the index.
+func (d *DB) OpenScan() ScanResult {
+	return d.opened
 }
 
 func (d *DB) Close() error {
@@ -146,6 +151,11 @@ func (d *DB) migrate() error {
 	}
 	if version < 6 {
 		if err := d.migrate006(); err != nil {
+			return err
+		}
+	}
+	if version < 7 {
+		if err := d.migrate007(); err != nil {
 			return err
 		}
 	}
@@ -382,6 +392,62 @@ func (d *DB) migrate006() error {
 	}
 	if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (6)"); err != nil {
 		return fmt.Errorf("recording migration 006: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// migrate007 adds what link resolution and search need: the text of each
+// link as written (so a dangling link can be resolved again later), note
+// aliases, and a full-text index of the notes. Zeroing mtime makes the next
+// scan re-read every file to fill them in.
+func (d *DB) migrate007() error {
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning migration transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// The FTS table keeps its own copy of the text, with each row's rowid
+	// matching its note's so the triggers can find it without a scan. It
+	// does not use external content: notes has no INTEGER PRIMARY KEY, so
+	// VACUUM may renumber its rowids. If that happens, search still joins on
+	// the id column and so never returns the wrong note, and Rebuild refills
+	// the table.
+	schema := `
+		ALTER TABLE links ADD COLUMN target_ref TEXT NOT NULL DEFAULT '';
+		UPDATE links SET target_ref = target_id;
+
+		CREATE TABLE note_aliases (
+			note_id TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+			alias   TEXT NOT NULL COLLATE NOCASE
+		);
+		CREATE INDEX idx_note_aliases_alias ON note_aliases(alias);
+		CREATE INDEX idx_note_aliases_note_id ON note_aliases(note_id);
+
+		CREATE VIRTUAL TABLE notes_fts USING fts5(
+			id UNINDEXED, title, body, tags,
+			tokenize = 'unicode61 remove_diacritics 2'
+		);
+		CREATE TRIGGER notes_fts_insert AFTER INSERT ON notes BEGIN
+			INSERT INTO notes_fts (rowid, id, title, body, tags) VALUES (new.rowid, new.id, new.title, new.body, new.tags);
+		END;
+		CREATE TRIGGER notes_fts_update AFTER UPDATE OF title, body, tags ON notes BEGIN
+			DELETE FROM notes_fts WHERE rowid = old.rowid;
+			INSERT INTO notes_fts (rowid, id, title, body, tags) VALUES (new.rowid, new.id, new.title, new.body, new.tags);
+		END;
+		CREATE TRIGGER notes_fts_delete AFTER DELETE ON notes BEGIN
+			DELETE FROM notes_fts WHERE rowid = old.rowid;
+		END;
+		INSERT INTO notes_fts (rowid, id, title, body, tags) SELECT rowid, id, title, body, tags FROM notes;
+
+		UPDATE notes SET mtime = 0;
+	`
+	if _, err := tx.Exec(schema); err != nil {
+		return fmt.Errorf("applying migration 007: %w", err)
+	}
+	if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (7)"); err != nil {
+		return fmt.Errorf("recording migration 007: %w", err)
 	}
 
 	return tx.Commit()

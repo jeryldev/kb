@@ -12,8 +12,10 @@ type Link struct {
 	SourceID   string
 	TargetType string
 	TargetID   string
-	Context    string
-	CreatedAt  time.Time
+	// TargetRef is the link as written, e.g. "Some Note" for [[Some Note]].
+	TargetRef string
+	Context   string
+	CreatedAt time.Time
 }
 
 type ParsedLink struct {
