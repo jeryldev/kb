@@ -146,3 +146,28 @@ func TestWriteKeepsModeAndFollowsSymlinks(t *testing.T) {
 		t.Errorf("target = %q", data)
 	}
 }
+
+func TestWalkSeesThroughSymlinkedNotes(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(t.TempDir(), "elsewhere.md")
+	os.WriteFile(target, []byte("v1"), 0o644)
+	os.Symlink(target, filepath.Join(dir, "link.md"))
+	os.WriteFile(target, []byte("version two, longer"), 0o644)
+
+	var got Entry
+	New(dir).Walk(func(e Entry) error { got = e; return nil })
+	if got.Size != int64(len("version two, longer")) {
+		t.Errorf("walk reported the link's size %d, not its target's", got.Size)
+	}
+}
+
+func TestRegularFilesAreNotDataless(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "here.md", "x")
+	New(dir).Walk(func(e Entry) error {
+		if e.Dataless {
+			t.Errorf("%s reported as evicted", e.Path)
+		}
+		return nil
+	})
+}

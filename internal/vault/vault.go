@@ -23,6 +23,9 @@ type Entry struct {
 	Path    string
 	ModTime time.Time
 	Size    int64
+	// Dataless files are present but evicted to iCloud: reading one blocks
+	// while it downloads, so callers should not read it unasked.
+	Dataless bool
 }
 
 func New(root string) *Vault {
@@ -84,6 +87,10 @@ func (v *Vault) WalkSkipping(fn func(Entry) error, skipped func(rel string, err 
 			return nil
 		}
 		info, err := d.Info()
+		if err == nil && d.Type()&fs.ModeSymlink != 0 {
+			// A symlinked note changes when its target does.
+			info, err = os.Stat(path)
+		}
 		if err != nil {
 			return skip(path, d, err)
 		}
@@ -91,7 +98,7 @@ func (v *Vault) WalkSkipping(fn func(Entry) error, skipped func(rel string, err 
 		if err != nil {
 			return err
 		}
-		return fn(Entry{Path: filepath.ToSlash(rel), ModTime: info.ModTime(), Size: info.Size()})
+		return fn(Entry{Path: filepath.ToSlash(rel), ModTime: info.ModTime(), Size: info.Size(), Dataless: isDataless(info)})
 	})
 }
 

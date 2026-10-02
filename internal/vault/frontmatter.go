@@ -21,7 +21,9 @@ type Doc struct {
 }
 
 func Parse(data []byte) (*Doc, error) {
-	text := string(data)
+	// A byte-order mark (some Windows editors write one) would hide the
+	// frontmatter delimiter; it is dropped.
+	text := strings.TrimPrefix(string(data), "\ufeff")
 	rest, ok := cutDelimiter(text)
 	if !ok {
 		return &Doc{Body: text}, nil
@@ -91,18 +93,36 @@ func (d *Doc) Render() []byte {
 // not a plain value.
 func (d *Doc) Value(key string) string { return d.str(key) }
 
+// SetValue sets a plain text frontmatter key; an empty value removes it.
+func (d *Doc) SetValue(key, value string) { d.setString(key, value) }
+
 // Has reports whether the frontmatter has key, whatever its value.
 func (d *Doc) Has(key string) bool { return d.get(key) != nil }
 
 func (d *Doc) ID() string        { return d.str("id") }
 func (d *Doc) Title() string     { return d.str("title") }
 func (d *Doc) Workspace() string { return d.str("workspace") }
-func (d *Doc) Tags() []string    { return d.list("tags") }
-func (d *Doc) Aliases() []string { return d.list("aliases") }
+func (d *Doc) Tags() []string    { return d.list("tags", false) }
+
+// Aliases are a list, or a string of names separated by commas: unlike
+// tags, an alias may contain spaces ("Project Phoenix").
+func (d *Doc) Aliases() []string { return d.list("aliases", true) }
 func (d *Doc) Created() *time.Time {
 	return d.time("created")
 }
+
+// Archived is when the note was archived, or nil. `archived: true` counts
+// too; with no date it reads as the zero time.
 func (d *Doc) Archived() *time.Time {
+	if v := d.get("archived"); v != nil && v.Kind == yaml.ScalarNode {
+		var b bool
+		if v.Tag == "!!bool" && v.Decode(&b) == nil {
+			if !b {
+				return nil
+			}
+			return &time.Time{}
+		}
+	}
 	return d.time("archived")
 }
 
@@ -158,6 +178,8 @@ func (d *Doc) set(key string, value *yaml.Node) {
 		if value == nil {
 			d.meta.Content = append(d.meta.Content[:i], d.meta.Content[i+2:]...)
 		} else {
+			old := d.meta.Content[i+1]
+			value.HeadComment, value.LineComment, value.FootComment = old.HeadComment, old.LineComment, old.FootComment
 			d.meta.Content[i+1] = value
 		}
 		return
@@ -169,15 +191,16 @@ func (d *Doc) set(key string, value *yaml.Node) {
 }
 
 func (d *Doc) str(key string) string {
-	if v := d.get(key); v != nil && v.Kind == yaml.ScalarNode {
+	if v := d.get(key); v != nil && v.Kind == yaml.ScalarNode && v.Tag != "!!null" {
 		return strings.TrimSpace(v.Value)
 	}
 	return ""
 }
 
-// list accepts a YAML sequence or, as Obsidian does, a string of items
-// separated by commas or spaces. A leading "#" on a tag is dropped.
-func (d *Doc) list(key string) []string {
+// list accepts a YAML sequence or a string of items separated by commas
+// and, unless commasOnly, spaces, as Obsidian reads tags. A leading "#" on
+// an item is dropped.
+func (d *Doc) list(key string, commasOnly bool) []string {
 	v := d.get(key)
 	if v == nil {
 		return nil
@@ -192,7 +215,7 @@ func (d *Doc) list(key string) []string {
 		}
 	case yaml.ScalarNode:
 		raw = strings.FieldsFunc(v.Value, func(r rune) bool {
-			return r == ',' || r == ' ' || r == '\t'
+			return r == ',' || (!commasOnly && (r == ' ' || r == '\t'))
 		})
 	}
 	var out []string
@@ -218,9 +241,10 @@ func (d *Doc) time(key string) *time.Time {
 	if s == "" {
 		return nil
 	}
+	// A time without a zone, like Obsidian's date property, is a time on
+	// the writer's own clock.
 	for _, layout := range timeLayouts {
-		if t, err := time.Parse(layout, s); err == nil {
-			t = t.UTC()
+		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
 			return &t
 		}
 	}
