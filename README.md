@@ -281,6 +281,7 @@ kb writes each file atomically, under a lock, and an edit to a note or card that
 
 ## Limitations
 
+- A board open in Obsidian while kb changes it: the Kanban plugin saves the board as it holds it a moment after any change made in Obsidian, so a kb change made in between can be lost. Close the board in Obsidian (or wait for it to reload the file) before changing it from kb.
 - The HTML graph needs an internet connection (D3.js from a CDN).
 - Publishing supports Jekyll only.
 - Archived workspaces still show in lists.

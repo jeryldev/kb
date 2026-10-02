@@ -1,0 +1,50 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      # Tests that need the plugin harness or sqlite3 fail here rather than skip.
+      KB_CI: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The Obsidian Kanban plugin, at the commit kb's board format was
+      # checked against, for the harness that runs its parser and writer.
+      - uses: actions/checkout@v4
+        with:
+          repository: mgmeyers/obsidian-kanban
+          ref: 5134c05ad9a7861f551cd15d57cf50db8394901a
+          path: obsidian-kanban
+
+      - name: Build the plugin harness
+        run: |
+          cd obsidian-kanban && yarn install --frozen-lockfile --ignore-scripts && cd ..
+          tools/kanban-compat/build.sh "$PWD/obsidian-kanban"
+
+      - name: sqlite3, for the kb 0.3 import tests
+        if: runner.os == 'Linux'
+        run: command -v sqlite3 || (sudo apt-get update && sudo apt-get install -y sqlite3)
+
+      - run: go vet ./...
+      - run: go test -count=1 ./...
