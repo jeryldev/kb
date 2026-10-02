@@ -1,9 +1,11 @@
 package vault
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
+	"syscall"
 	"testing"
 )
 
@@ -170,4 +172,27 @@ func TestRegularFilesAreNotDataless(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// On a filesystem without hard links (exFAT, network shares) Create still
+// works, and still never replaces a file (A6).
+func TestCreateWorksWithoutHardLinks(t *testing.T) {
+	link = func(string, string) error { return syscall.ENOTSUP }
+	t.Cleanup(func() { link = os.Link })
+	dir := t.TempDir()
+	v := New(dir)
+	if _, err := v.Create("a.md", &Doc{Body: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Create("a.md", &Doc{Body: "second"}); !errors.Is(err, ErrExists) {
+		t.Errorf("err = %v, want ErrExists", err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "a.md"))
+	if string(data) != "first" {
+		t.Errorf("file = %q", data)
+	}
+	leftovers, _ := filepath.Glob(filepath.Join(dir, ".kb-*.tmp"))
+	if len(leftovers) != 0 {
+		t.Errorf("temp files left: %v", leftovers)
+	}
 }

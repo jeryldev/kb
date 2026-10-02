@@ -174,13 +174,39 @@ func (v *Vault) Create(rel string, doc *Doc) (Entry, error) {
 		return Entry{}, fmt.Errorf("creating %s: %w", rel, err)
 	}
 	defer os.Remove(tmp)
-	if err := os.Link(tmp, path); err != nil {
-		if errors.Is(err, fs.ErrExist) {
-			return Entry{}, fmt.Errorf("%s: %w", rel, ErrExists)
+	err = link(tmp, path)
+	if errors.Is(err, fs.ErrExist) {
+		return Entry{}, fmt.Errorf("%s: %w", rel, ErrExists)
+	}
+	if err != nil {
+		// Some filesystems (exFAT, many network shares) have no hard
+		// links. Creating the file exclusively still never replaces one,
+		// though a crash part way can leave it short.
+		if err := createExclusive(path, doc); err != nil {
+			if errors.Is(err, fs.ErrExist) {
+				return Entry{}, fmt.Errorf("%s: %w", rel, ErrExists)
+			}
+			return Entry{}, fmt.Errorf("creating %s: %w", rel, err)
 		}
-		return Entry{}, fmt.Errorf("creating %s: %w", rel, err)
 	}
 	return v.Stat(rel)
+}
+
+// link is os.Link, replaced in tests to act like a filesystem without
+// hard links.
+var link = os.Link
+
+func createExclusive(path string, doc *Doc) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(doc.Render()); err != nil {
+		f.Close()
+		os.Remove(path)
+		return err
+	}
+	return f.Close()
 }
 
 // writeTemp writes doc to a hidden temporary file beside path, so a rename
