@@ -93,3 +93,26 @@ func TestEditingLeavesNoTempFiles(t *testing.T) {
 		t.Errorf("temp files created: %v", after)
 	}
 }
+
+// A board opened automatically at start-up (KB_BOARD, the tmux session or
+// the folder name) must not reopen every time the picker loads, or "b"
+// can never leave it.
+func TestStartupBoardOpensOnlyOnce(t *testing.T) {
+	db, err := store.OpenWithPath(":memory:", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	ws, _ := db.GetDefaultWorkspace()
+	if _, err := db.CreateBoard("auto", "", ws.ID); err != nil {
+		t.Fatal(err)
+	}
+	app := NewApp(db, "auto")
+
+	if _, ok := app.initPicker()().(boardCreatedMsg); !ok {
+		t.Fatal("the start-up board should open first")
+	}
+	if msg, ok := app.initPicker()().(workspacesLoadedMsg); !ok {
+		t.Errorf("going back reopened the board instead of the picker: %#v", msg)
+	}
+}

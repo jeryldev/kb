@@ -39,9 +39,12 @@ type workspacesLoadedMsg struct {
 }
 
 func (a *App) initPicker() tea.Cmd {
-	if a.boardName != "" {
+	// The board named at start-up opens once; after that the picker is the
+	// picker, or "b" from that board would land straight back on it.
+	if name := a.boardName; name != "" {
+		a.boardName = ""
 		return func() tea.Msg {
-			board, err := a.db.GetBoardByName(a.boardName)
+			board, err := a.db.GetBoardByName(name)
 			if err != nil {
 				return errMsg{err}
 			}
