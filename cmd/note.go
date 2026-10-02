@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/jeryldev/kb/internal/model"
@@ -12,6 +13,9 @@ var noteCmd = &cobra.Command{
 	Use:     "notes",
 	Aliases: []string{"note"},
 	Short:   "Manage notes",
+	// A stray word is a mistyped subcommand, not something to ignore while
+	// listing every note.
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		tag, _ := cmd.Flags().GetString("tag")
 		search, _ := cmd.Flags().GetString("search")
@@ -30,32 +34,77 @@ var noteCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-
-		if len(notes) == 0 {
-			if jsonOutput {
-				return printJSON([]noteJSON{})
-			}
-			fmt.Fprintln(cmd.OutOrStdout(), "No notes found. Create one with: kb note create \"title\"")
-			return nil
-		}
-
-		if jsonOutput {
-			out := make([]noteJSON, len(notes))
-			for i, n := range notes {
-				out[i] = toNoteJSON(n)
-			}
-			return printJSON(out)
-		}
-
-		w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "SLUG\tTITLE\tTAGS\tUPDATED")
-		for _, n := range notes {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
-				n.Slug, truncateStr(n.Title, 40), n.Tags,
-				n.UpdatedAt.Format("02 Jan 2006"))
-		}
-		return w.Flush()
+		return printNotes(cmd, notes)
 	},
+}
+
+var noteSearchCmd = &cobra.Command{
+	Use:   "search <words...>",
+	Short: "Search notes for all the given words",
+	Args:  cobra.MinimumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		notes, err := db.SearchNotes(strings.Join(args, " "))
+		if err != nil {
+			return err
+		}
+		return printNotes(cmd, notes)
+	},
+}
+
+var noteRenameCmd = &cobra.Command{
+	Use:   "rename <note> <new title>",
+	Short: "Rename a note and its file, updating links to it",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		note, err := resolveNote(args[0])
+		if err != nil {
+			return err
+		}
+		renamed, changed, err := db.RenameNote(note.ID, args[1])
+		if renamed == nil {
+			return err
+		}
+		if jsonOutput {
+			if err != nil {
+				return err
+			}
+			return printJSON(toNoteJSON(renamed))
+		}
+		noun := "notes"
+		if changed == 1 {
+			noun = "note"
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Renamed %q to %q (%s); updated links in %d %s\n",
+			note.Title, renamed.Title, renamed.Path, changed, noun)
+		return err
+	},
+}
+
+func printNotes(cmd *cobra.Command, notes []*model.Note) error {
+	if len(notes) == 0 {
+		if jsonOutput {
+			return printJSON([]noteJSON{})
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), "No notes found. Create one with: kb note create \"title\"")
+		return nil
+	}
+
+	if jsonOutput {
+		out := make([]noteJSON, len(notes))
+		for i, n := range notes {
+			out[i] = toNoteJSON(n)
+		}
+		return printJSON(out)
+	}
+
+	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "SLUG\tTITLE\tTAGS\tUPDATED")
+	for _, n := range notes {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+			n.Slug, truncateStr(n.Title, 40), n.Tags,
+			n.UpdatedAt.Format("02 Jan 2006"))
+	}
+	return w.Flush()
 }
 
 var noteCreateCmd = &cobra.Command{
@@ -238,6 +287,8 @@ var noteBacklinksCmd = &cobra.Command{
 	},
 }
 
+// resolveNote finds a note by slug, id or id prefix, or by any name a
+// wikilink could use (title, file name, alias).
 func resolveNote(ref string) (*model.Note, error) {
 	note, err := db.GetNoteBySlug(ref)
 	if err == nil {
@@ -248,6 +299,9 @@ func resolveNote(ref string) (*model.Note, error) {
 		if err == nil {
 			return db.GetNote(id)
 		}
+	}
+	if note, err := db.ResolveNoteRef(ref); err == nil {
+		return note, nil
 	}
 	return nil, fmt.Errorf("note %q not found", ref)
 }
@@ -270,5 +324,7 @@ func init() {
 	noteCmd.AddCommand(noteEditCmd)
 	noteCmd.AddCommand(noteDeleteCmd)
 	noteCmd.AddCommand(noteBacklinksCmd)
+	noteCmd.AddCommand(noteSearchCmd)
+	noteCmd.AddCommand(noteRenameCmd)
 	rootCmd.AddCommand(noteCmd)
 }

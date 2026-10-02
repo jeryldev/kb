@@ -358,7 +358,9 @@ func (d *DB) exportLegacyNotes() error {
 		}
 		doc := &vault.Doc{Body: n.Body}
 		doc.SetID(n.ID)
-		doc.SetTitle(n.Title)
+		if n.Title != fileStem(noteFileName(n.Title, n.Slug)) {
+			doc.SetTitle(n.Title)
+		}
 		doc.SetTags(n.TagList())
 		doc.SetPinned(n.Pinned)
 		doc.SetWorkspace(wsName)
@@ -366,9 +368,10 @@ func (d *DB) exportLegacyNotes() error {
 		doc.SetCreated(&created)
 		doc.SetArchived(n.ArchivedAt)
 
-		entry, err := d.createOrAdopt(n.Slug+".md", doc)
+		name := noteFileName(n.Title, n.Slug)
+		entry, err := d.createOrAdopt(name, doc)
 		if errors.Is(err, vault.ErrExists) {
-			entry, err = d.createOrAdopt(n.Slug+"-"+shortID(n.ID)+".md", doc)
+			entry, err = d.createOrAdopt(strings.TrimSuffix(name, ".md")+" "+shortID(n.ID)+".md", doc)
 		}
 		if err != nil {
 			return err
@@ -451,6 +454,7 @@ func (d *DB) rewriteWorkspaceInFiles(workspaceID string) error {
 			errs = append(errs, fmt.Errorf("%s: %w", t.rel, err))
 			continue
 		}
+		doc.SetID(t.id)
 		doc.SetWorkspace(wsName)
 		if err := d.writeAndIndex(rel, doc); err != nil {
 			errs = append(errs, err)

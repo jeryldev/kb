@@ -10,7 +10,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/google/uuid"
 	"github.com/jeryldev/kb/internal/model"
 	"github.com/jeryldev/kb/internal/vault"
 )
@@ -36,23 +35,7 @@ func (d *DB) CreateNote(title, slug, body, workspaceID string) (*model.Note, err
 		return nil, fmt.Errorf("note with slug %q already exists", slug)
 	}
 
-	wsName, err := d.workspaceNameForFile(workspaceID)
-	if err != nil {
-		return nil, err
-	}
-	now := time.Now().UTC().Truncate(time.Second)
-	doc := &vault.Doc{Body: body}
-	doc.SetID(uuid.New().String())
-	doc.SetTitle(title)
-	doc.SetWorkspace(wsName)
-	doc.SetCreated(&now)
-
-	rel := slug + ".md"
-	entry, err := d.vault.Create(rel, doc)
-	if err != nil {
-		return nil, err
-	}
-	return d.indexOne(entry, doc)
+	return d.CreateNoteAt(noteFileName(title, slug), title, body, workspaceID)
 }
 
 func (d *DB) GetNote(id string) (*model.Note, error) {
@@ -72,6 +55,19 @@ func (d *DB) GetNoteBySlug(slug string) (*model.Note, error) {
 		`SELECT `+noteColumns+` FROM notes WHERE slug = ? AND archived_at IS NULL`, slug))
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("note %q not found", slug)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("querying note: %w", err)
+	}
+	return note, nil
+}
+
+// GetNoteByPath finds the live note in the file at rel.
+func (d *DB) GetNoteByPath(rel string) (*model.Note, error) {
+	note, err := scanNote(d.conn.QueryRow(
+		`SELECT `+noteColumns+` FROM notes WHERE path = ? AND archived_at IS NULL`, rel))
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("no note at %s", rel)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("querying note: %w", err)
@@ -150,6 +146,7 @@ func (d *DB) SetNoteWorkspace(noteID, workspaceID string) error {
 	if err != nil {
 		return err
 	}
+	doc.SetID(noteID)
 	doc.SetWorkspace(wsName)
 	return d.writeAndIndex(rel, doc)
 }
@@ -184,6 +181,7 @@ func (d *DB) UpdateNote(note *model.Note) error {
 	if err != nil {
 		return err
 	}
+	doc.SetID(note.ID)
 
 	// A file's name is its title unless the frontmatter says otherwise, so
 	// an untitled file keeps no title key while the two agree.
@@ -213,6 +211,7 @@ func (d *DB) ArchiveNote(id string) error {
 	if err != nil {
 		return err
 	}
+	doc.SetID(id)
 	now := time.Now().UTC().Truncate(time.Second)
 	doc.SetArchived(&now)
 	return d.writeAndIndex(rel, doc)
@@ -281,7 +280,9 @@ var ErrConflict = errors.New("note changed on disk since it was read; reload it 
 
 // fileForWrite reads a note's file for a change, refusing a file that now
 // holds a different note (replaced or renamed over). With unchanged it also
-// refuses a file edited since the index read it. Either refusal rescans, so
+// refuses a file edited since the index read it. A caller changing the note
+// itself should SetID on the doc, pinning its identity to the file so it
+// survives a rename. Either refusal rescans, so
 // the index catches up with the vault. A missing file is fs.ErrNotExist.
 func (d *DB) fileForWrite(id string, includeArchived, unchanged bool) (string, *vault.Doc, error) {
 	query := "SELECT path, mtime, size FROM notes WHERE id = ?"
@@ -316,7 +317,6 @@ func (d *DB) fileForWrite(id string, includeArchived, unchanged bool) (string, *
 		d.Scan()
 		return "", nil, fmt.Errorf("%s now holds a different note (id %s): %w", rel.String, other, ErrConflict)
 	}
-	doc.SetID(id)
 	return rel.String, doc, nil
 }
 

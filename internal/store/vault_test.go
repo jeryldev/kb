@@ -50,17 +50,47 @@ func TestCreateNoteWritesAMarkdownFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if note.Path != "dual-transformation.md" {
-		t.Errorf("path = %q", note.Path)
+	// Named by its title, as Obsidian names notes.
+	if note.Path != "Dual Transformation.md" || note.Slug != "dual-transformation" {
+		t.Errorf("path = %q, slug = %q", note.Path, note.Slug)
 	}
-	content := readVaultFile(t, db, "dual-transformation.md")
-	for _, want := range []string{"id: " + note.ID, "title: Dual Transformation", "created: ", "---\nBody [[other]]"} {
+	content := readVaultFile(t, db, "Dual Transformation.md")
+	for _, want := range []string{"id: " + note.ID, "created: ", "---\nBody [[other]]"} {
 		if !strings.Contains(content, want) {
 			t.Errorf("file lacks %q:\n%s", want, content)
 		}
 	}
-	if strings.Contains(content, "workspace:") {
-		t.Errorf("the default workspace should not be written:\n%s", content)
+	// The file name is the title, so neither the title nor the default
+	// workspace is repeated inside it.
+	for _, unwanted := range []string{"title:", "workspace:"} {
+		if strings.Contains(content, unwanted) {
+			t.Errorf("file has redundant %q:\n%s", unwanted, content)
+		}
+	}
+}
+
+func TestCreateNoteKeepsTitlesFileNamesCannotHold(t *testing.T) {
+	db := testDB(t)
+	note, err := db.CreateNote("C++: primer", "c-primer", "", testDefaultWSID(t, db))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if note.Path != "C++ primer.md" || note.Title != "C++: primer" {
+		t.Errorf("note = %+v", note)
+	}
+	if !strings.Contains(readVaultFile(t, db, "C++ primer.md"), `title: 'C++: primer'`) {
+		t.Errorf("exact title not kept:\n%s", readVaultFile(t, db, "C++ primer.md"))
+	}
+}
+
+func TestCreateNoteWithACustomSlugNamesTheFileAfterIt(t *testing.T) {
+	db := testDB(t)
+	note, err := db.CreateNote("Quarterly Planning Notes", "q3", "", testDefaultWSID(t, db))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if note.Path != "q3.md" || note.Slug != "q3" || note.Title != "Quarterly Planning Notes" {
+		t.Errorf("note = %+v", note)
 	}
 }
 
@@ -121,8 +151,8 @@ func TestScanPicksUpEditsAndDeletions(t *testing.T) {
 	db := testDB(t)
 	note, _ := db.CreateNote("Edit Me", "edit-me", "v1", testDefaultWSID(t, db))
 
-	content := strings.Replace(readVaultFile(t, db, "edit-me.md"), "v1", "v2 edited in vim", 1)
-	writeVaultFile(t, db, "edit-me.md", content)
+	content := strings.Replace(readVaultFile(t, db, "Edit Me.md"), "v1", "v2 edited in vim", 1)
+	writeVaultFile(t, db, "Edit Me.md", content)
 	res, err := db.Scan()
 	if err != nil {
 		t.Fatal(err)
@@ -135,7 +165,7 @@ func TestScanPicksUpEditsAndDeletions(t *testing.T) {
 		t.Errorf("body = %q", got.Body)
 	}
 
-	os.Remove(filepath.Join(db.Vault().Root(), "edit-me.md"))
+	os.Remove(filepath.Join(db.Vault().Root(), "Edit Me.md"))
 	res, err = db.Scan()
 	if err != nil {
 		t.Fatal(err)
@@ -165,7 +195,7 @@ func TestRenamedFileKeepsItsID(t *testing.T) {
 	note, _ := db.CreateNote("Moving", "moving", "x", testDefaultWSID(t, db))
 	root := db.Vault().Root()
 	os.MkdirAll(filepath.Join(root, "archive"), 0o755)
-	if err := os.Rename(filepath.Join(root, "moving.md"), filepath.Join(root, "archive", "moved.md")); err != nil {
+	if err := os.Rename(filepath.Join(root, "Moving.md"), filepath.Join(root, "archive", "moved.md")); err != nil {
 		t.Fatal(err)
 	}
 	scan(t, db)
@@ -181,7 +211,7 @@ func TestRenamedFileKeepsItsID(t *testing.T) {
 func TestCopiedFileGetsItsOwnID(t *testing.T) {
 	db := testDB(t)
 	note, _ := db.CreateNote("Original", "original", "x", testDefaultWSID(t, db))
-	writeVaultFile(t, db, "copy.md", readVaultFile(t, db, "original.md"))
+	writeVaultFile(t, db, "copy.md", readVaultFile(t, db, "Original.md"))
 	scan(t, db)
 	notes, _ := db.ListNotes()
 	if len(notes) != 2 {
@@ -190,7 +220,7 @@ func TestCopiedFileGetsItsOwnID(t *testing.T) {
 	if notes[0].ID == notes[1].ID {
 		t.Error("copy shares the original's id")
 	}
-	if got, _ := db.GetNote(note.ID); got.Path != "original.md" {
+	if got, _ := db.GetNote(note.ID); got.Path != "Original.md" {
 		t.Errorf("original moved to %q", got.Path)
 	}
 }
@@ -265,7 +295,7 @@ func TestArchiveNoteMarksTheFileAndHidesIt(t *testing.T) {
 	if err := db.ArchiveNote(note.ID); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(readVaultFile(t, db, "old.md"), "archived: ") {
+	if !strings.Contains(readVaultFile(t, db, "Old.md"), "archived: ") {
 		t.Error("file not marked archived")
 	}
 	notes, _ := db.ListNotes()
@@ -295,7 +325,7 @@ func TestDeleteNoteRemovesFileLinksAndPublishLog(t *testing.T) {
 	if err := db.DeleteNote(note.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(db.Vault().Root(), "published.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(db.Vault().Root(), "Published.md")); !os.IsNotExist(err) {
 		t.Error("file still exists")
 	}
 	if links, _ := db.GetForwardLinks("note", note.ID); len(links) != 0 {
@@ -328,14 +358,14 @@ func TestLegacyNotesAreExportedOnOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	content := readVaultFile(t, db, "old-note.md")
-	for _, want := range []string{"id: legacy-1", "title: Old Note", "tags: [x, y]", "pinned: true", "created: 2026-03-06T10:00:00Z", "---\nkept body"} {
+	content := readVaultFile(t, db, "Old Note.md")
+	for _, want := range []string{"id: legacy-1", "tags: [x, y]", "pinned: true", "created: 2026-03-06T10:00:00Z", "---\nkept body"} {
 		if !strings.Contains(content, want) {
 			t.Errorf("exported file lacks %q:\n%s", want, content)
 		}
 	}
 	note, err := db.GetNote("legacy-1")
-	if err != nil || note.Path != "old-note.md" {
+	if err != nil || note.Path != "Old Note.md" {
 		t.Fatalf("note = %+v err = %v", note, err)
 	}
 	// The file carries the note's last-modified time, so lists keep their
@@ -368,7 +398,7 @@ func TestRenamingAWorkspaceRewritesItsNotes(t *testing.T) {
 	if err := db.UpdateWorkspace(ws); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(readVaultFile(t, db, "lecture.md"), "workspace: university") {
+	if !strings.Contains(readVaultFile(t, db, "Lecture.md"), "workspace: university") {
 		t.Error("note still names the old workspace")
 	}
 }
@@ -418,14 +448,14 @@ func TestStaleSaveDoesNotOverwriteAnOutsideEdit(t *testing.T) {
 	db := testDB(t)
 	stale, _ := db.CreateNote("Shared", "shared", "v1", testDefaultWSID(t, db))
 	// Edited in another editor after kb read it, with no scan in between.
-	edited := strings.Replace(readVaultFile(t, db, "shared.md"), "v1", "edited elsewhere", 1)
-	writeVaultFile(t, db, "shared.md", edited)
+	edited := strings.Replace(readVaultFile(t, db, "Shared.md"), "v1", "edited elsewhere", 1)
+	writeVaultFile(t, db, "Shared.md", edited)
 
 	stale.Body = "kb's stale copy"
 	if err := db.UpdateNote(stale); err == nil {
 		t.Fatal("expected a conflict error")
 	}
-	if got := readVaultFile(t, db, "shared.md"); !strings.Contains(got, "edited elsewhere") {
+	if got := readVaultFile(t, db, "Shared.md"); !strings.Contains(got, "edited elsewhere") {
 		t.Fatalf("outside edit lost:\n%s", got)
 	}
 	// The conflict refreshed the index, so a re-read sees the edit.
@@ -481,8 +511,8 @@ func TestAnEmptyVaultDoesNotWipeTheIndex(t *testing.T) {
 	db := testDB(t)
 	note, _ := db.CreateNote("Safe", "safe", "x", testDefaultWSID(t, db))
 	db.CreateNote("Also Safe", "also-safe", "x", testDefaultWSID(t, db))
-	os.Remove(filepath.Join(db.Vault().Root(), "safe.md"))
-	os.Remove(filepath.Join(db.Vault().Root(), "also-safe.md"))
+	os.Remove(filepath.Join(db.Vault().Root(), "Safe.md"))
+	os.Remove(filepath.Join(db.Vault().Root(), "Also Safe.md"))
 	res, err := db.Scan()
 	if err != nil {
 		t.Fatal(err)
@@ -496,6 +526,9 @@ func TestAnEmptyVaultDoesNotWipeTheIndex(t *testing.T) {
 }
 
 func TestAnUnreadableFolderDoesNotDropItsNotes(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read a folder with no permissions, so nothing is unreadable")
+	}
 	db := testDB(t)
 	db.CreateNote("Keep", "keep", "x", testDefaultWSID(t, db))
 	writeVaultFile(t, db, "locked/inner.md", "y")
@@ -528,14 +561,14 @@ func TestLegacyExportAdoptsAFileItAlreadyWrote(t *testing.T) {
 		testDefaultWSID(t, db))
 	db.Close()
 	// A crash after the file was written but before the index recorded it.
-	os.WriteFile(filepath.Join(vaultDir, "half-done.md"), []byte("---\nid: legacy-2\ntitle: Half Done\n---\nb"), 0o644)
+	os.WriteFile(filepath.Join(vaultDir, "Half Done.md"), []byte("---\nid: legacy-2\ntitle: Half Done\n---\nb"), 0o644)
 
 	db, err = OpenWithPath(dbFile, vaultDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	files, _ := filepath.Glob(filepath.Join(vaultDir, "half-done*.md"))
+	files, _ := filepath.Glob(filepath.Join(vaultDir, "Half Done*.md"))
 	if len(files) != 1 {
 		t.Errorf("files = %v", files)
 	}

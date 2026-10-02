@@ -2443,3 +2443,102 @@ func TestIndexReportsTheVaultAndRebuilds(t *testing.T) {
 		t.Errorf("rebuild output:\n%s", out)
 	}
 }
+
+// fakeEditor makes $EDITOR append a line to the file it is given, as a
+// person typing into it would.
+func fakeEditor(t *testing.T, line string) {
+	t.Helper()
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", `sh -c 'printf "\n`+line+`" >> "$0"'`)
+}
+
+func TestOpenEditsTheNoteFileByAnyName(t *testing.T) {
+	setupTestDB(t)
+	executeCmd(t, "notes", "create", "Dual Transformation", "--body", "start", "--json")
+	fakeEditor(t, "typed in the editor")
+
+	executeCmd(t, "open", "dual transformation")
+
+	note, err := db.GetNoteBySlug("dual-transformation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(note.Body, "typed in the editor") {
+		t.Errorf("index not refreshed after editing: %q", note.Body)
+	}
+}
+
+func TestDailyCreatesThenReopensTodaysNote(t *testing.T) {
+	setupTestDB(t)
+	t.Setenv("KB_DAILY_DIR", "journal")
+	fakeEditor(t, "- did a thing")
+
+	executeCmd(t, "daily", "--date", "2026-10-02")
+	executeCmd(t, "daily", "--date", "2026-10-02")
+
+	data, err := os.ReadFile(filepath.Join(db.Vault().Root(), "journal", "2026-10-02.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(data), "- did a thing") != 2 {
+		t.Errorf("daily note:\n%s", data)
+	}
+	notes, _ := db.ListNotes()
+	if len(notes) != 1 || notes[0].Title != "2026-10-02" {
+		t.Errorf("notes = %+v", notes)
+	}
+	if _, err := executeCmdErr(t, "daily", "--date", "2 Oct"); err == nil {
+		t.Error("expected an error for a malformed date")
+	}
+}
+
+func TestRenameRewritesLinks(t *testing.T) {
+	setupTestDB(t)
+	executeCmd(t, "notes", "create", "Old Name", "--json")
+	executeCmd(t, "notes", "create", "Linker", "--body", "see [[Old Name]]", "--json")
+
+	out := executeCmd(t, "notes", "rename", "old-name", "New Name")
+	if !strings.Contains(out, "New Name") || !strings.Contains(out, "1 note") {
+		t.Errorf("output: %s", out)
+	}
+	linker, _ := db.GetNoteBySlug("linker")
+	if linker.Body != "see [[New Name]]" {
+		t.Errorf("linker body = %q", linker.Body)
+	}
+}
+
+func TestTagsListsCounts(t *testing.T) {
+	setupTestDB(t)
+	executeCmd(t, "notes", "create", "A", "--tags", "go,tools", "--json")
+	executeCmd(t, "notes", "create", "B", "--tags", "go", "--json")
+	out := executeCmd(t, "tags")
+	if !strings.Contains(out, "go") || !strings.Contains(out, "2") || !strings.Contains(out, "tools") {
+		t.Errorf("tags output:\n%s", out)
+	}
+	if strings.Index(out, "go") > strings.Index(out, "tools") {
+		t.Errorf("most used should come first:\n%s", out)
+	}
+}
+
+func TestNoteSearchSubcommandAndStrayArgs(t *testing.T) {
+	setupTestDB(t)
+	executeCmd(t, "notes", "create", "Go Patterns", "--body", "Concurrency patterns", "--json")
+	executeCmd(t, "notes", "create", "Rust Guide", "--body", "Memory safety", "--json")
+
+	out := executeCmd(t, "notes", "search", "concurrency")
+	if !strings.Contains(out, "go-patterns") || strings.Contains(out, "rust-guide") {
+		t.Errorf("search output:\n%s", out)
+	}
+	if _, err := executeCmdErr(t, "notes", "serch", "x"); err == nil {
+		t.Error("a mistyped subcommand should be an error, not a full listing")
+	}
+}
+
+func TestShowFindsANoteByTitle(t *testing.T) {
+	setupTestDB(t)
+	executeCmd(t, "notes", "create", "Six Paths Framework", "--json")
+	out := executeCmd(t, "notes", "show", "six paths framework")
+	if !strings.Contains(out, "Six Paths Framework") {
+		t.Errorf("output: %s", out)
+	}
+}
