@@ -32,6 +32,17 @@ func pathID(rel string) string {
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("kb-vault:"+rel)).String()
 }
 
+// freePathID is pathID(rel), or, if another note already holds that id,
+// a variant still derived only from the path, so it is the same in every
+// rebuilt index.
+func freePathID(rel string, seen map[string]bool) string {
+	id := pathID(rel)
+	for n := 2; seen[id]; n++ {
+		id = pathID(fmt.Sprintf("%s\x00%d", rel, n))
+	}
+	return id
+}
+
 // Scan brings the index up to date with the vault: files that are new or
 // whose mtime or size changed are read again, and rows whose file is gone
 // are dropped.
@@ -122,15 +133,20 @@ func (d *DB) Scan() (ScanResult, error) {
 			seen[ix.id] = true
 		}
 	}
+	// Ids written in files are claimed before ids derived from paths: a
+	// renamed note carries the id its old path gave it, and a new file at
+	// that old path must not take it.
 	for _, f := range changed {
-		if f.id != "" {
-			continue
+		if id := f.doc.ID(); f.id == "" && id != "" && !seen[id] {
+			f.id = id
+			seen[id] = true
 		}
-		f.id = f.doc.ID()
-		if f.id == "" || seen[f.id] {
-			f.id = pathID(f.entry.Path)
+	}
+	for _, f := range changed {
+		if f.id == "" {
+			f.id = freePathID(f.entry.Path, seen)
+			seen[f.id] = true
 		}
-		seen[f.id] = true
 	}
 
 	tx, err := d.conn.Begin()

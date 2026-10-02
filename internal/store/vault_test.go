@@ -573,3 +573,34 @@ func TestLegacyExportAdoptsAFileItAlreadyWrote(t *testing.T) {
 		t.Errorf("files = %v", files)
 	}
 }
+
+func TestANewFileAtARenamedNotesOldPathIsANewNote(t *testing.T) {
+	db := testDB(t)
+	writeVaultFile(t, db, "Foo.md", "the original")
+	scan(t, db)
+	orig, _ := db.GetNoteBySlug("foo")
+	if _, _, err := db.RenameNote(orig.ID, "Zzz"); err != nil {
+		t.Fatal(err)
+	}
+	writeVaultFile(t, db, "Foo.md", "someone new")
+	scan(t, db)
+
+	renamed, err := db.GetNoteBySlug("zzz")
+	if err != nil || renamed.ID != orig.ID || renamed.Body != "the original" {
+		t.Fatalf("renamed note lost its identity: %+v, %v", renamed, err)
+	}
+	newcomer, err := db.GetNoteBySlug("foo")
+	if err != nil || newcomer.ID == orig.ID || newcomer.Body != "someone new" {
+		t.Fatalf("newcomer = %+v, %v", newcomer, err)
+	}
+
+	// A rebuilt index agrees, though "Foo.md" is walked before "Zzz.md":
+	// the id written in a file wins over one derived from a path.
+	again := testDBWithVault(t, db.Vault().Root())
+	if r, _ := again.GetNoteBySlug("zzz"); r == nil || r.ID != orig.ID {
+		t.Errorf("after rebuild the renamed note has id %v, want %s", r, orig.ID)
+	}
+	if n, _ := again.GetNoteBySlug("foo"); n == nil || n.ID != newcomer.ID {
+		t.Errorf("after rebuild the newcomer has id %v, want %s", n, newcomer.ID)
+	}
+}
