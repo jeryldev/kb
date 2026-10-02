@@ -15,8 +15,16 @@ func (d *DB) CreateWorkspace(name string, kind model.WorkspaceKind, description,
 		return nil, err
 	}
 
+	// One immediate transaction, so the position read and the write that
+	// uses it cannot interleave with another kb process doing the same.
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+
 	var maxPos int
-	err := d.conn.QueryRow("SELECT COALESCE(MAX(position), -1) FROM workspaces").Scan(&maxPos)
+	err = tx.QueryRow("SELECT COALESCE(MAX(position), -1) FROM workspaces").Scan(&maxPos)
 	if err != nil {
 		return nil, fmt.Errorf("getting max position: %w", err)
 	}
@@ -33,7 +41,7 @@ func (d *DB) CreateWorkspace(name string, kind model.WorkspaceKind, description,
 		UpdatedAt:   now,
 	}
 
-	_, err = d.conn.Exec(
+	_, err = tx.Exec(
 		`INSERT INTO workspaces (id, name, kind, description, path, position, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		ws.ID, ws.Name, string(ws.Kind), ws.Description, ws.Path, ws.Position, ws.CreatedAt, ws.UpdatedAt,
@@ -45,6 +53,9 @@ func (d *DB) CreateWorkspace(name string, kind model.WorkspaceKind, description,
 		return nil, fmt.Errorf("inserting workspace: %w", err)
 	}
 
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("committing: %w", err)
+	}
 	return ws, nil
 }
 

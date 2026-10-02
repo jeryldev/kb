@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jeryldev/kb/internal/model"
@@ -46,13 +47,17 @@ func OpenWithPath(path, vaultDir string) (*DB, error) {
 	// immediate transactions take that lock up front, so a read-then-write
 	// transaction cannot deadlock against another process.
 	conn, err := sql.Open("sqlite", path+
-		"?_pragma=journal_mode(wal)&_pragma=foreign_keys(on)&_pragma=busy_timeout(10000)&_txlock=immediate")
+		"?_pragma=busy_timeout(10000)&_pragma=foreign_keys(on)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
 	conn.SetMaxOpenConns(1)
 
 	db := &DB{conn: conn, vault: vault.New(vaultDir)}
+	if err := db.useWAL(); err != nil {
+		conn.Close()
+		return nil, err
+	}
 	if err := db.migrate(); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("running migrations: %w", err)
@@ -69,6 +74,26 @@ func OpenWithPath(path, vaultDir string) (*DB, error) {
 	db.opened = res
 
 	return db, nil
+}
+
+// useWAL switches the database to write-ahead logging, so readers never
+// block the writer. The mode is stored in the file, so this only changes
+// anything on a new database; but there, several kb processes starting
+// together race to switch it, and SQLite returns SQLITE_BUSY for that
+// without waiting out busy_timeout. So retry for a while.
+func (d *DB) useWAL() error {
+	var err error
+	for range 100 {
+		var mode string
+		if err = d.conn.QueryRow("PRAGMA journal_mode = wal").Scan(&mode); err == nil {
+			return nil
+		}
+		if !strings.Contains(err.Error(), "SQLITE_BUSY") {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("enabling write-ahead logging: %w", err)
 }
 
 func (d *DB) Vault() *vault.Vault {
@@ -90,85 +115,67 @@ func (d *DB) Close() error {
 }
 
 func (d *DB) migrate() error {
-	_, err := d.conn.Exec(`
+	// In a transaction, which is immediate, rather than autocommit: an
+	// autocommit write takes a shared lock and upgrades it, and two
+	// processes doing that at once deadlock, which SQLite reports as
+	// SQLITE_BUSY at once without waiting out busy_timeout.
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("creating migrations table: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version INTEGER PRIMARY KEY,
 			applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)
-	`)
-	if err != nil {
+	`); err != nil {
+		return fmt.Errorf("creating migrations table: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("creating migrations table: %w", err)
 	}
 
-	// Use BEGIN IMMEDIATE to prevent concurrent migration races.
-	// Without this, two processes could both read version=0 and
-	// attempt the same migration simultaneously.
-	tx, err := d.conn.Begin()
-	if err != nil {
-		return fmt.Errorf("beginning migration lock: %w", err)
+	steps := []func(*sql.Tx) error{
+		d.migrate001, d.migrate002, d.migrate003, d.migrate004,
+		d.migrate005, d.migrate006, d.migrate007,
 	}
-	defer tx.Rollback()
-
-	if _, err := tx.Exec("SELECT 1 FROM schema_migrations LIMIT 1"); err == nil {
-		// Table exists; try to acquire write lock via a dummy write
-		_, _ = tx.Exec("DELETE FROM schema_migrations WHERE version = -1")
-	}
-
-	var version int
-	err = tx.QueryRow("SELECT COALESCE(MAX(version), 0) FROM schema_migrations").Scan(&version)
-	if err != nil {
-		return fmt.Errorf("checking migration version: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing migration version check: %w", err)
-	}
-
-	if version < 1 {
-		if err := d.migrate001(); err != nil {
+	for i, step := range steps {
+		if err := d.applyMigration(i+1, step); err != nil {
 			return err
 		}
 	}
-	if version < 2 {
-		if err := d.migrate002(); err != nil {
-			return err
-		}
-	}
-	if version < 3 {
-		if err := d.migrate003(); err != nil {
-			return err
-		}
-	}
-	if version < 4 {
-		if err := d.migrate004(); err != nil {
-			return err
-		}
-	}
-	if version < 5 {
-		if err := d.migrate005(); err != nil {
-			return err
-		}
-	}
-	if version < 6 {
-		if err := d.migrate006(); err != nil {
-			return err
-		}
-	}
-	if version < 7 {
-		if err := d.migrate007(); err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 
-func (d *DB) migrate001() error {
+// applyMigration runs one migration unless it has been applied. The version
+// is read inside the migration's own immediate transaction, which holds the
+// write lock, so of several kb processes opening an old database at once
+// exactly one applies each step and the others see it done.
+func (d *DB) applyMigration(version int, step func(*sql.Tx) error) error {
 	tx, err := d.conn.Begin()
 	if err != nil {
-		return fmt.Errorf("beginning migration transaction: %w", err)
+		return fmt.Errorf("beginning migration %03d: %w", version, err)
 	}
 	defer tx.Rollback()
+
+	var current int
+	if err := tx.QueryRow("SELECT COALESCE(MAX(version), 0) FROM schema_migrations").Scan(&current); err != nil {
+		return fmt.Errorf("checking migration version: %w", err)
+	}
+	if current >= version {
+		return nil
+	}
+	if err := step(tx); err != nil {
+		return fmt.Errorf("applying migration %03d: %w", version, err)
+	}
+	if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (?)", version); err != nil {
+		return fmt.Errorf("recording migration %03d: %w", version, err)
+	}
+	return tx.Commit()
+}
+
+func (d *DB) migrate001(tx *sql.Tx) error {
 
 	schema := `
 		CREATE TABLE IF NOT EXISTS boards (
@@ -211,19 +218,10 @@ func (d *DB) migrate001() error {
 	if _, err := tx.Exec(schema); err != nil {
 		return fmt.Errorf("applying migration 001: %w", err)
 	}
-	if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (1)"); err != nil {
-		return fmt.Errorf("recording migration 001: %w", err)
-	}
-
-	return tx.Commit()
+	return nil
 }
 
-func (d *DB) migrate002() error {
-	tx, err := d.conn.Begin()
-	if err != nil {
-		return fmt.Errorf("beginning migration transaction: %w", err)
-	}
-	defer tx.Rollback()
+func (d *DB) migrate002(tx *sql.Tx) error {
 
 	schema := `
 		CREATE TABLE IF NOT EXISTS notes (
@@ -258,19 +256,10 @@ func (d *DB) migrate002() error {
 	if _, err := tx.Exec(schema); err != nil {
 		return fmt.Errorf("applying migration 002: %w", err)
 	}
-	if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (2)"); err != nil {
-		return fmt.Errorf("recording migration 002: %w", err)
-	}
-
-	return tx.Commit()
+	return nil
 }
 
-func (d *DB) migrate003() error {
-	tx, err := d.conn.Begin()
-	if err != nil {
-		return fmt.Errorf("beginning migration transaction: %w", err)
-	}
-	defer tx.Rollback()
+func (d *DB) migrate003(tx *sql.Tx) error {
 
 	schema := `
 		CREATE TABLE IF NOT EXISTS workspaces (
@@ -293,19 +282,10 @@ func (d *DB) migrate003() error {
 	if _, err := tx.Exec(schema); err != nil {
 		return fmt.Errorf("applying migration 003: %w", err)
 	}
-	if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (3)"); err != nil {
-		return fmt.Errorf("recording migration 003: %w", err)
-	}
-
-	return tx.Commit()
+	return nil
 }
 
-func (d *DB) migrate004() error {
-	tx, err := d.conn.Begin()
-	if err != nil {
-		return fmt.Errorf("beginning migration transaction: %w", err)
-	}
-	defer tx.Rollback()
+func (d *DB) migrate004(tx *sql.Tx) error {
 
 	schema := `
 		CREATE TABLE IF NOT EXISTS publish_targets (
@@ -333,22 +313,12 @@ func (d *DB) migrate004() error {
 	if _, err := tx.Exec(schema); err != nil {
 		return fmt.Errorf("applying migration 004: %w", err)
 	}
-	if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (4)"); err != nil {
-		return fmt.Errorf("recording migration 004: %w", err)
-	}
-
-	return tx.Commit()
+	return nil
 }
 
-func (d *DB) migrate005() error {
-	tx, err := d.conn.Begin()
-	if err != nil {
-		return fmt.Errorf("beginning migration transaction: %w", err)
-	}
-	defer tx.Rollback()
-
+func (d *DB) migrate005(tx *sql.Tx) error {
 	wsID := uuid.New().String()
-	_, err = tx.Exec(
+	_, err := tx.Exec(
 		`INSERT INTO workspaces (id, name, kind, description, path, position, created_at, updated_at)
 		 VALUES (?, ?, ?, '', '', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
 		wsID, model.DefaultWorkspaceName, string(model.KindArea),
@@ -364,21 +334,12 @@ func (d *DB) migrate005() error {
 		return fmt.Errorf("updating notes with default workspace: %w", err)
 	}
 
-	if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (5)"); err != nil {
-		return fmt.Errorf("recording migration 005: %w", err)
-	}
-
-	return tx.Commit()
+	return nil
 }
 
 // migrate006 makes the notes table an index of the vault: each row records
 // the file it came from and the mtime and size it had when it was read.
-func (d *DB) migrate006() error {
-	tx, err := d.conn.Begin()
-	if err != nil {
-		return fmt.Errorf("beginning migration transaction: %w", err)
-	}
-	defer tx.Rollback()
+func (d *DB) migrate006(tx *sql.Tx) error {
 
 	schema := `
 		ALTER TABLE notes ADD COLUMN path TEXT;
@@ -390,23 +351,14 @@ func (d *DB) migrate006() error {
 	if _, err := tx.Exec(schema); err != nil {
 		return fmt.Errorf("applying migration 006: %w", err)
 	}
-	if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (6)"); err != nil {
-		return fmt.Errorf("recording migration 006: %w", err)
-	}
-
-	return tx.Commit()
+	return nil
 }
 
 // migrate007 adds what link resolution and search need: the text of each
 // link as written (so a dangling link can be resolved again later), note
 // aliases, and a full-text index of the notes. Zeroing mtime makes the next
 // scan re-read every file to fill them in.
-func (d *DB) migrate007() error {
-	tx, err := d.conn.Begin()
-	if err != nil {
-		return fmt.Errorf("beginning migration transaction: %w", err)
-	}
-	defer tx.Rollback()
+func (d *DB) migrate007(tx *sql.Tx) error {
 
 	// The FTS table keeps its own copy of the text, with each row's rowid
 	// matching its note's so the triggers can find it without a scan. It
@@ -446,11 +398,7 @@ func (d *DB) migrate007() error {
 	if _, err := tx.Exec(schema); err != nil {
 		return fmt.Errorf("applying migration 007: %w", err)
 	}
-	if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (7)"); err != nil {
-		return fmt.Errorf("recording migration 007: %w", err)
-	}
-
-	return tx.Commit()
+	return nil
 }
 
 // VaultDir is KB_VAULT, or ~/notes.
