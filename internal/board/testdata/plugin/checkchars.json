@@ -1,0 +1,48 @@
+{
+  "frontmatter": {
+    "kanban-plugin": "board"
+  },
+  "settings": {
+    "kanban-plugin": "board"
+  },
+  "lanes": [
+    {
+      "title": "Mixed",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "open",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": []
+        },
+        {
+          "titleRaw": "done",
+          "checkChar": "x",
+          "blockId": null,
+          "tags": []
+        },
+        {
+          "titleRaw": "in progress",
+          "checkChar": "/",
+          "blockId": null,
+          "tags": []
+        },
+        {
+          "titleRaw": "cancelled",
+          "checkChar": "-",
+          "blockId": null,
+          "tags": []
+        },
+        {
+          "titleRaw": "plain item without a box",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": []
+        }
+      ]
+    }
+  ],
+  "archive": []
+}

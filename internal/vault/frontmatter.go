@@ -87,6 +87,13 @@ func (d *Doc) Render() []byte {
 	return buf.Bytes()
 }
 
+// Value is the frontmatter value of key as text, or "" if it is absent or
+// not a plain value.
+func (d *Doc) Value(key string) string { return d.str(key) }
+
+// Has reports whether the frontmatter has key, whatever its value.
+func (d *Doc) Has(key string) bool { return d.get(key) != nil }
+
 func (d *Doc) ID() string        { return d.str("id") }
 func (d *Doc) Title() string     { return d.str("title") }
 func (d *Doc) Workspace() string { return d.str("workspace") }

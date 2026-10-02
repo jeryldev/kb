@@ -1,0 +1,76 @@
+{
+  "frontmatter": {
+    "kanban-plugin": "board",
+    "workspace": "School"
+  },
+  "settings": {
+    "kanban-plugin": "board",
+    "lane-width": 272
+  },
+  "lanes": [
+    {
+      "title": "Backlog",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "Add auth",
+          "checkChar": " ",
+          "blockId": "c1efacf3",
+          "tags": []
+        },
+        {
+          "titleRaw": "Draft outline @{2026-10-05} #writing",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": [
+            "#writing"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "In Progress",
+      "maxItems": 2,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "Fix login bug #ui #bug [priority:: high] [ext:: linear:DEV-42]\nSteps are in [[Login Notes]].\nSecond line of the description.",
+          "checkChar": " ",
+          "blockId": "889962bb",
+          "tags": [
+            "#bug",
+            "#ui"
+          ]
+        },
+        {
+          "titleRaw": "Half done thing",
+          "checkChar": "/",
+          "blockId": "aa00aa00",
+          "tags": []
+        }
+      ]
+    },
+    {
+      "title": "Done",
+      "maxItems": 0,
+      "complete": true,
+      "items": [
+        {
+          "titleRaw": "Shipped it",
+          "checkChar": "x",
+          "blockId": "5b20d812",
+          "tags": []
+        }
+      ]
+    }
+  ],
+  "archive": [
+    {
+      "titleRaw": "Old card",
+      "checkChar": " ",
+      "blockId": "3c8e4fa8",
+      "tags": []
+    }
+  ]
+}

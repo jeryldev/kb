@@ -1,0 +1,30 @@
+{
+  "frontmatter": {
+    "kanban-plugin": "board"
+  },
+  "settings": {
+    "kanban-plugin": "board"
+  },
+  "lanes": [
+    {
+      "title": "Todo",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "Plan trip\n- book flights\n- [ ] pack bags\n1. first\n2. second",
+          "checkChar": " ",
+          "blockId": "plan0001",
+          "tags": []
+        },
+        {
+          "titleRaw": "After nested",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": []
+        }
+      ]
+    }
+  ],
+  "archive": []
+}

@@ -1,0 +1,30 @@
+{
+  "frontmatter": {
+    "kanban-plugin": "board"
+  },
+  "settings": {
+    "kanban-plugin": "board"
+  },
+  "lanes": [
+    {
+      "title": "Starred",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "star bullet one",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": []
+        },
+        {
+          "titleRaw": "star bullet two",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": []
+        }
+      ]
+    }
+  ],
+  "archive": []
+}

@@ -1,0 +1,37 @@
+{
+  "frontmatter": {
+    "kanban-plugin": "board"
+  },
+  "settings": {
+    "kanban-plugin": "board"
+  },
+  "lanes": [
+    {
+      "title": "Top level lane",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "in h1",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": []
+        }
+      ]
+    },
+    {
+      "title": "Third level lane",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "in h3",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": []
+        }
+      ]
+    }
+  ],
+  "archive": []
+}

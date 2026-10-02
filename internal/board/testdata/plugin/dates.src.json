@@ -1,0 +1,30 @@
+{
+  "frontmatter": {
+    "kanban-plugin": "board"
+  },
+  "settings": {
+    "kanban-plugin": "board"
+  },
+  "lanes": [
+    {
+      "title": "Todo",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "Dated @{2026-10-02} and timed @@{10:30}",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": []
+        },
+        {
+          "titleRaw": "Linked date @[[2026-10-05]]",
+          "checkChar": " ",
+          "blockId": "dl000001",
+          "tags": []
+        }
+      ]
+    }
+  ],
+  "archive": []
+}

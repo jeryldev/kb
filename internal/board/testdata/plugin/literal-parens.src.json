@@ -1,0 +1,24 @@
+{
+  "frontmatter": {
+    "kanban-plugin": "board"
+  },
+  "settings": {
+    "kanban-plugin": "board"
+  },
+  "lanes": [
+    {
+      "title": "Q3",
+      "maxItems": 2024,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "read as a limit of 2024",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": []
+        }
+      ]
+    }
+  ],
+  "archive": []
+}

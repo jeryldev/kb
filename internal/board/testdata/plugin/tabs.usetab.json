@@ -1,0 +1,24 @@
+{
+  "frontmatter": {
+    "kanban-plugin": "board"
+  },
+  "settings": {
+    "kanban-plugin": "board"
+  },
+  "lanes": [
+    {
+      "title": "Todo",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "Tab indented\nfirst line\nsecond line",
+          "checkChar": " ",
+          "blockId": "tabs0001",
+          "tags": []
+        }
+      ]
+    }
+  ],
+  "archive": []
+}

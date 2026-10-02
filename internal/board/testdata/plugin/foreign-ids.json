@@ -1,0 +1,30 @@
+{
+  "frontmatter": {
+    "kanban-plugin": "board"
+  },
+  "settings": {
+    "kanban-plugin": "board"
+  },
+  "lanes": [
+    {
+      "title": "Todo",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "Plugin style id",
+          "checkChar": " ",
+          "blockId": "a1b2c3",
+          "tags": []
+        },
+        {
+          "titleRaw": "User word id",
+          "checkChar": " ",
+          "blockId": "my-task",
+          "tags": []
+        }
+      ]
+    }
+  ],
+  "archive": []
+}

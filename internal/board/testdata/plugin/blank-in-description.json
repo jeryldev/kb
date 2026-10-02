@@ -1,0 +1,30 @@
+{
+  "frontmatter": {
+    "kanban-plugin": "board"
+  },
+  "settings": {
+    "kanban-plugin": "board"
+  },
+  "lanes": [
+    {
+      "title": "Todo",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "Card with paragraphs\nfirst paragraph\n\nsecond paragraph",
+          "checkChar": " ",
+          "blockId": "para0001",
+          "tags": []
+        },
+        {
+          "titleRaw": "Next",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": []
+        }
+      ]
+    }
+  ],
+  "archive": []
+}

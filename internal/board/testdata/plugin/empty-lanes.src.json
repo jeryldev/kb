@@ -1,0 +1,36 @@
+{
+  "frontmatter": {
+    "kanban-plugin": "board"
+  },
+  "settings": {
+    "kanban-plugin": "board"
+  },
+  "lanes": [
+    {
+      "title": "Empty first",
+      "maxItems": 0,
+      "complete": false,
+      "items": []
+    },
+    {
+      "title": "Has one",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "only card",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": []
+        }
+      ]
+    },
+    {
+      "title": "Empty last",
+      "maxItems": 0,
+      "complete": false,
+      "items": []
+    }
+  ],
+  "archive": []
+}
