@@ -34,7 +34,8 @@ func GenerateFrontMatter(note *model.Note, date time.Time, draft bool) string {
 		fmt.Fprintf(&b, "tags: [%s]\n", strings.Join(tags, ", "))
 	}
 
-	excerpt := extractExcerpt(note.Body)
+	// Front matter is plain text, so links become their words.
+	excerpt := extractExcerpt(ResolveWikilinks(note.Body, nil, nil))
 	if excerpt != "" {
 		fmt.Fprintf(&b, "excerpt: %q\n", excerpt)
 	}

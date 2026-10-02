@@ -2642,3 +2642,28 @@ func TestPublishDoesNotLinkToDrafts(t *testing.T) {
 		t.Errorf("a draft was linked:\n%s", data)
 	}
 }
+
+func TestPublishTargetCanBeDeletedAfterPublishing(t *testing.T) {
+	setupTestDB(t)
+	publishSite(t)
+	vaultNote(t, "Post.md", "---\ncreated: 2026-05-13\n---\nx")
+	executeCmd(t, "publish", "post")
+	executeCmd(t, "publish", "delete", "site")
+	out := executeCmd(t, "publish", "list")
+	if !strings.Contains(out, "No publish targets") {
+		t.Errorf("target still listed:\n%s", out)
+	}
+}
+
+func TestPublishedExcerptHasNoWikilinkBrackets(t *testing.T) {
+	setupTestDB(t)
+	site := publishSite(t)
+	vaultNote(t, "Other.md", "---\ncreated: 2026-05-12\n---\nother")
+	vaultNote(t, "Post.md", "---\ncreated: 2026-05-13\n---\nRead [[Other]] and [[card:Some card]] first.")
+	executeCmd(t, "publish", "other")
+	executeCmd(t, "publish", "post")
+	data, _ := os.ReadFile(filepath.Join(site, "_posts", "2026-05-13-post.md"))
+	if !strings.Contains(string(data), `excerpt: "Read Other and Some card first."`) {
+		t.Errorf("excerpt:\n%s", data)
+	}
+}

@@ -106,8 +106,18 @@ func (d *DB) ListPublishTargets() ([]*model.PublishTarget, error) {
 	return targets, rows.Err()
 }
 
+// DeletePublishTarget forgets a site and its publish history. The posts
+// already written to the site are left alone.
 func (d *DB) DeletePublishTarget(id string) error {
-	result, err := d.conn.Exec("DELETE FROM publish_targets WHERE id = ?", id)
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("DELETE FROM publish_log WHERE target_id = ?", id); err != nil {
+		return fmt.Errorf("deleting publish history: %w", err)
+	}
+	result, err := tx.Exec("DELETE FROM publish_targets WHERE id = ?", id)
 	if err != nil {
 		return fmt.Errorf("deleting publish target: %w", err)
 	}
@@ -118,7 +128,7 @@ func (d *DB) DeletePublishTarget(id string) error {
 	if rows == 0 {
 		return fmt.Errorf("publish target not found")
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (d *DB) CreatePublishLog(noteID, targetID, filePath, frontMatter string) (*model.PublishLog, error) {
