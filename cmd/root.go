@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -72,7 +73,25 @@ func openStore() (*fstore.Store, error) {
 }
 
 func Execute() error {
-	return rootCmd.Execute()
+	c, err := rootCmd.ExecuteC()
+	if err != nil && holdOnError(c, isTerminal(os.Stdin), os.Getenv("TMUX") != "") {
+		// dev opens kb in a tmux popup that closes when kb exits, which
+		// would take the error with it before it could be read.
+		fmt.Fprint(os.Stderr, "Press Enter to close.")
+		bufio.NewReader(os.Stdin).ReadString('\n')
+	}
+	return err
+}
+
+// holdOnError says whether to wait before exiting on an error: when the
+// TUI could not start in a terminal inside tmux, such as a popup.
+func holdOnError(c *cobra.Command, terminal, inTmux bool) bool {
+	return c == rootCmd && terminal && inTmux
+}
+
+func isTerminal(f *os.File) bool {
+	info, err := f.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 func init() {
@@ -80,22 +99,78 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&boardFlag, "board", "B", "", "Board to use (default: $KB_BOARD, the dev tmux session, or the folder name)")
 }
 
-// detectBoard is the board the user means: --board, then $KB_BOARD, then
-// the dev-session-manager tmux session name, then the folder's name.
-func detectBoard() string {
+// boardCandidates are the boards the user may mean, in order: --board,
+// then $KB_BOARD (each the only candidate when set), then the dev tmux
+// session's name, the folder's name, and the name of the git repository
+// the folder is in. dev opens kb in a workspace's folder, which can be a
+// worktree (~/.worktrees/<repo>/<branch>) or a folder deep in a repo.
+func boardCandidates() []string {
 	if boardFlag != "" {
-		return boardFlag
+		return []string{boardFlag}
 	}
 	if name := os.Getenv("KB_BOARD"); name != "" {
-		return name
+		return []string{name}
 	}
+	var out []string
 	if session := os.Getenv("TMUX_SESSION_NAME"); session != "" {
-		return strings.TrimPrefix(session, "dev-")
+		out = append(out, strings.TrimPrefix(session, "dev-"))
 	}
 	if cwd, err := os.Getwd(); err == nil {
-		return filepath.Base(cwd)
+		out = append(out, filepath.Base(cwd))
+		if repo := repoName(cwd); repo != "" {
+			out = append(out, repo)
+		}
 	}
-	return ""
+	return out
+}
+
+// repoName is the name of the git repository dir is in: the main
+// repository's folder, also from inside one of its worktrees.
+func repoName(dir string) string {
+	for d := dir; ; d = filepath.Dir(d) {
+		dotGit := filepath.Join(d, ".git")
+		info, err := os.Stat(dotGit)
+		if err == nil && info.IsDir() {
+			return filepath.Base(d)
+		}
+		if err == nil {
+			// A worktree's .git file points into the main repository:
+			// "gitdir: <repo>/.git/worktrees/<name>".
+			data, err := os.ReadFile(dotGit)
+			if err != nil {
+				return ""
+			}
+			gitdir, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir:")
+			if !ok {
+				return ""
+			}
+			gitdir = filepath.Clean(strings.TrimSpace(gitdir))
+			if before, _, found := strings.Cut(gitdir, string(filepath.Separator)+".git"+string(filepath.Separator)); found {
+				return filepath.Base(before)
+			}
+			return filepath.Base(d)
+		}
+		if parent := filepath.Dir(d); parent == d {
+			return ""
+		}
+	}
+}
+
+// detectBoard is the first candidate board that exists, else the first
+// candidate.
+func detectBoard() string {
+	candidates := boardCandidates()
+	if len(candidates) == 0 {
+		return ""
+	}
+	if db != nil {
+		for _, name := range candidates {
+			if _, err := db.GetBoard(name); err == nil {
+				return name
+			}
+		}
+	}
+	return candidates[0]
 }
 
 // currentBoard resolves the board card and column commands work on.
@@ -108,5 +183,17 @@ func currentBoard() (*model.Board, error) {
 	if boardFlag != "" || os.Getenv("KB_BOARD") != "" {
 		return nil, err
 	}
-	return nil, fmt.Errorf("no board named %q (taken from the folder name); choose one with --board or $KB_BOARD, or create it with: kb board create %q", name, name)
+	return nil, fmt.Errorf("no board named %s (taken from the folder and its repository); choose one with --board or $KB_BOARD, or create it with: kb board create %q", strings.Join(quoted(boardCandidates()), " or "), name)
+}
+
+func quoted(names []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, n := range names {
+		if !seen[n] {
+			seen[n] = true
+			out = append(out, fmt.Sprintf("%q", n))
+		}
+	}
+	return out
 }

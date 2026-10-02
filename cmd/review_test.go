@@ -389,6 +389,58 @@ INSERT INTO cards (id, column_id, title, labels, priority, position) VALUES ('01
 	}
 }
 
+// kb opened from dev's popup runs in the workspace's folder: a worktree
+// such as ~/.worktrees/allocator-one/sample, or a folder inside a repo.
+// The board is the repository's, not the folder's.
+func TestTheBoardComesFromTheGitRepoOfTheFolder(t *testing.T) {
+	setupTestDB(t)
+	t.Setenv("KB_BOARD", "")
+	t.Setenv("TMUX_SESSION_NAME", "")
+	createTestBoard(t, "allocator-one")
+	createTestTitle := func(title string) {
+		createTestCard(t, testLanes(t, "allocator-one")[0], title, "")
+	}
+	createTestTitle("On the repo's board")
+
+	root := t.TempDir()
+	repo := filepath.Join(root, "code", "allocator-one")
+	os.MkdirAll(filepath.Join(repo, ".git", "worktrees", "sample"), 0o755)
+	os.MkdirAll(filepath.Join(repo, "lib", "deep"), 0o755)
+	tree := filepath.Join(root, ".worktrees", "allocator-one", "sample")
+	os.MkdirAll(filepath.Join(tree, "assets"), 0o755)
+	os.WriteFile(filepath.Join(tree, ".git"), []byte("gitdir: "+filepath.Join(repo, ".git", "worktrees", "sample")+"\n"), 0o644)
+
+	for _, dir := range []string{filepath.Join(repo, "lib", "deep"), tree, filepath.Join(tree, "assets")} {
+		t.Chdir(dir)
+		out, err := executeCmdErr(t, "cards")
+		if err != nil || !strings.Contains(out, "On the repo's board") {
+			t.Errorf("in %s: %v\n%s", dir, err, out)
+		}
+	}
+
+	// A board named after the folder itself still comes first.
+	createTestBoard(t, "sample")
+	t.Chdir(tree)
+	if out := executeCmd(t, "cards"); !strings.Contains(out, `No cards on board "sample"`) {
+		t.Errorf("the folder's own board should win:\n%s", out)
+	}
+
+	// $KB_BOARD names one board, and a missing one is an error.
+	t.Setenv("KB_BOARD", "nope")
+	if _, err := executeCmdErr(t, "cards"); err == nil {
+		t.Error("a missing $KB_BOARD board should be an error")
+	}
+}
+
+func TestOnlyTheTUIInATmuxTerminalWaitsAfterAnError(t *testing.T) {
+	if !holdOnError(rootCmd, true, true) {
+		t.Error("the TUI in a tmux popup should wait")
+	}
+	if holdOnError(noteCmd, true, true) || holdOnError(rootCmd, false, true) || holdOnError(rootCmd, true, false) {
+		t.Error("only the TUI, in a terminal, in tmux")
+	}
+}
+
 func TestASitesPermalinkPatternShapesLinksBetweenPosts(t *testing.T) { // C11
 	setupTestDB(t)
 	site := t.TempDir()
