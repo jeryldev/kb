@@ -20,10 +20,10 @@ func harness(t *testing.T) string {
 	t.Helper()
 	path, _ := filepath.Abs("../../tools/kanban-compat/harness.js")
 	if _, err := os.Stat(path); err != nil {
-		t.Skip("plugin harness not built (tools/kanban-compat/build.sh)")
+		missing(t, "plugin harness not built (tools/kanban-compat/build.sh)")
 	}
 	if _, err := exec.LookPath("node"); err != nil {
-		t.Skip("node not installed")
+		missing(t, "node not installed")
 	}
 	return path
 }
@@ -194,4 +194,14 @@ func TestLaneChangesKeepTheArchive(t *testing.T) {
 			t.Errorf("%s: the plugin reads %d lanes and %d archived cards:\n%s", name, len(got.Lanes), len(got.Archive), out)
 		}
 	}
+}
+
+// missing skips a test that needs a tool this machine lacks, except in CI
+// (KB_CI set), where every test must run.
+func missing(t *testing.T, what string) {
+	t.Helper()
+	if os.Getenv("KB_CI") != "" {
+		t.Fatalf("%s, and KB_CI is set", what)
+	}
+	t.Skip(what)
 }

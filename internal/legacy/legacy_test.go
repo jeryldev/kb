@@ -14,7 +14,7 @@ import (
 func fixture(t *testing.T, rows string) string {
 	t.Helper()
 	if _, err := exec.LookPath("sqlite3"); err != nil {
-		t.Skip("sqlite3 is not installed")
+		missing(t, "sqlite3 is not installed")
 	}
 	schema, err := os.ReadFile("testdata/schema.sql")
 	if err != nil {
@@ -362,4 +362,14 @@ func TestAnImportThatStoppedPartWayCanBeRunAgain(t *testing.T) {
 	if _, err := s.FindCard("kb", "889962bb"); err != nil {
 		t.Error(err)
 	}
+}
+
+// missing skips a test that needs a tool this machine lacks, except in CI
+// (KB_CI set), where every test must run.
+func missing(t *testing.T, what string) {
+	t.Helper()
+	if os.Getenv("KB_CI") != "" {
+		t.Fatalf("%s, and KB_CI is set", what)
+	}
+	t.Skip(what)
 }

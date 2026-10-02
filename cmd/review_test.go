@@ -328,7 +328,7 @@ func TestStartupOpensTheVaultAndWaitsForAnImport(t *testing.T) {
 
 func TestImportCommandDryRunThenImport(t *testing.T) {
 	if _, err := exec.LookPath("sqlite3"); err != nil {
-		t.Skip("sqlite3 is not installed")
+		missing(t, "sqlite3 is not installed")
 	}
 	dir := t.TempDir()
 	t.Setenv("KB_VAULT", filepath.Join(dir, "vault"))
@@ -496,4 +496,14 @@ func TestVersionWorksWhileAnImportWaits(t *testing.T) {
 	if out := executeCmd(t, "--version"); !strings.HasPrefix(out, "kb version ") {
 		t.Errorf("output: %q", out)
 	}
+}
+
+// missing skips a test that needs a tool this machine lacks, except in CI
+// (KB_CI set), where every test must run.
+func missing(t *testing.T, what string) {
+	t.Helper()
+	if os.Getenv("KB_CI") != "" {
+		t.Fatalf("%s, and KB_CI is set", what)
+	}
+	t.Skip(what)
 }
