@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 )
 
 type Note struct {
@@ -15,9 +16,11 @@ type Note struct {
 	Tags        string
 	Pinned      bool
 	WorkspaceID string
-	ArchivedAt  *time.Time
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// Path is the note's file, relative to the vault.
+	Path       string
+	ArchivedAt *time.Time
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 func (n *Note) TagList() []string {
@@ -76,4 +79,19 @@ func ValidateNoteSlug(slug string) error {
 		return fmt.Errorf("note slug must be lowercase alphanumeric with hyphens")
 	}
 	return nil
+}
+
+// FileName is the file name (without .md) for a note titled title, the way
+// Obsidian names notes: the title itself, minus characters that file
+// systems reject (/ \ : * ? " < > |), that break wikilinks ([ ] # ^ |), or
+// that hide the file (a leading dot). It is "" when nothing is left.
+func FileName(title string) string {
+	cleaned := strings.Map(func(r rune) rune {
+		if strings.ContainsRune(`/\:*?"<>|[]#^`, r) || unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, title)
+	name := strings.Join(strings.Fields(cleaned), " ")
+	return strings.Trim(name, ". ")
 }

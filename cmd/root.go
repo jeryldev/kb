@@ -17,8 +17,12 @@ var db *store.DB
 
 var rootCmd = &cobra.Command{
 	Use:   "kb",
-	Short: "Terminal Kanban board",
-	Long:  "A terminal Kanban board for personal project management.",
+	Short: "Terminal notes and Kanban boards",
+	Long: `Terminal notes and Kanban boards for personal projects.
+
+Notes are Markdown files in a vault folder ($KB_VAULT, default ~/notes), so
+any editor, sync tool or app can read them; kb indexes them for search,
+links and backlinks. Run kb alone for the TUI.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		if cmd.Name() == "help" {
 			return nil
@@ -30,6 +34,9 @@ var rootCmd = &cobra.Command{
 		db, err = store.Open()
 		if err != nil {
 			return fmt.Errorf("opening database: %w", err)
+		}
+		for _, problem := range db.Problems() {
+			fmt.Fprintf(os.Stderr, "kb: warning: %s\n", problem)
 		}
 		return nil
 	},

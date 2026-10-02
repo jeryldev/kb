@@ -27,7 +27,7 @@ brews:
       name: homebrew-tap
     skip_upload: true
     homepage: "https://github.com/jeryldev/kb"
-    description: "Terminal Kanban board for personal project management"
+    description: "Terminal notes and Kanban boards, with notes as Markdown files"
     license: "MIT"
     install: |
       bin.install "kb"

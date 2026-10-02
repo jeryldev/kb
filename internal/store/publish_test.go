@@ -259,7 +259,7 @@ func TestListPublishLogs(t *testing.T) {
 	}
 }
 
-func TestGetPublishedNoteSlugs(t *testing.T) {
+func TestGetPublishedPostsGivesEachNotesLatestPost(t *testing.T) {
 	db := testDB(t)
 	wsID := testDefaultWSID(t, db)
 
@@ -267,17 +267,21 @@ func TestGetPublishedNoteSlugs(t *testing.T) {
 	_, _ = db.CreateNote("Unpublished", "unpublished", "body", wsID)
 	pt, _ := db.CreatePublishTarget("site", model.EngineJekyll, "/tmp", "_posts", nil)
 
+	_, _ = db.CreatePublishLog(n1.ID, pt.ID, "_posts/2026-02-24-old-name.md", "")
 	_, _ = db.CreatePublishLog(n1.ID, pt.ID, "_posts/2026-02-24-published-note.md", "")
 
-	slugs, err := db.GetPublishedNoteSlugs(pt.ID)
+	posts, err := db.GetPublishedPosts(pt.ID)
 	if err != nil {
-		t.Fatalf("GetPublishedNoteSlugs: %v", err)
+		t.Fatalf("GetPublishedPosts: %v", err)
 	}
-	if len(slugs) != 1 {
-		t.Fatalf("len = %d, want 1", len(slugs))
+	if len(posts) != 1 || posts[n1.ID].Path != "_posts/2026-02-24-published-note.md" || posts[n1.ID].Draft {
+		t.Errorf("posts = %v", posts)
 	}
-	if _, ok := slugs["published-note"]; !ok {
-		t.Error("expected 'published-note' slug in map")
+
+	_, _ = db.CreatePublishLog(n1.ID, pt.ID, "_posts/2026-02-24-published-note.md", "---\npublished: false\n---\n")
+	posts, _ = db.GetPublishedPosts(pt.ID)
+	if !posts[n1.ID].Draft {
+		t.Errorf("a draft publish should be marked: %v", posts)
 	}
 }
 

@@ -33,8 +33,16 @@ func (d *DB) CreateColumn(boardID, name string) (*model.Column, error) {
 		return nil, err
 	}
 
+	// One immediate transaction, so the position read and the write that
+	// uses it cannot interleave with another kb process doing the same.
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+
 	var maxPos int
-	err := d.conn.QueryRow(
+	err = tx.QueryRow(
 		"SELECT COALESCE(MAX(position), -1) FROM columns WHERE board_id = ?",
 		boardID,
 	).Scan(&maxPos)
@@ -49,7 +57,7 @@ func (d *DB) CreateColumn(boardID, name string) (*model.Column, error) {
 		Position: maxPos + 1,
 	}
 
-	_, err = d.conn.Exec(
+	_, err = tx.Exec(
 		"INSERT INTO columns (id, board_id, name, position) VALUES (?, ?, ?, ?)",
 		col.ID, col.BoardID, col.Name, col.Position,
 	)
@@ -57,6 +65,9 @@ func (d *DB) CreateColumn(boardID, name string) (*model.Column, error) {
 		return nil, fmt.Errorf("inserting column: %w", err)
 	}
 
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("committing: %w", err)
+	}
 	return col, nil
 }
 

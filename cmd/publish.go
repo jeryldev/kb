@@ -8,6 +8,7 @@ import (
 
 	"github.com/jeryldev/kb/internal/model"
 	"github.com/jeryldev/kb/internal/publish"
+	"github.com/jeryldev/kb/internal/store"
 	"github.com/spf13/cobra"
 )
 
@@ -30,19 +31,41 @@ var publishCmd = &cobra.Command{
 		draft, _ := cmd.Flags().GetBool("draft")
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
 
-		now := time.Now().UTC()
-
-		publishedSlugs, err := db.GetPublishedNoteSlugs(target.ID)
+		posts, err := db.GetPublishedPosts(target.ID)
 		if err != nil {
-			return fmt.Errorf("getting published slugs: %w", err)
+			return fmt.Errorf("getting published posts: %w", err)
 		}
 
-		for slug := range publishedSlugs {
-			publishedSlugs[slug] = publish.JekyllPermalink(slug, now)
+		// A post is dated by the day the note was written, on the writer's
+		// calendar, and a note published before keeps its post, so
+		// republishing updates it in place.
+		date := note.CreatedAt.In(time.Local)
+		relPath := ""
+		prev, err := db.GetLatestPublishLog(note.ID, target.ID)
+		if err != nil {
+			return err
+		}
+		if prev != nil {
+			if prevDate, ok := publish.PostDateFromPath(prev.FilePath); ok {
+				date, relPath = prevDate, prev.FilePath
+			}
+		}
+		if relPath == "" {
+			relPath = freePostPath(target.BasePath, target.PostsDir, note, date, posts)
 		}
 
-		content := publish.GeneratePost(note, now, draft, publishedSlugs, db)
-		relPath := publish.PostFilePath(target.PostsDir, note.Slug, now)
+		// Link only to posts that are out: a draft's URL does not exist yet.
+		permalinks := make(map[string]string, len(posts))
+		for noteID, post := range posts {
+			if post.Draft {
+				continue
+			}
+			if permalink, ok := publish.PermalinkFromPostPath(post.Path); ok {
+				permalinks[noteID] = permalink
+			}
+		}
+
+		content := publish.GeneratePost(note, date, draft, permalinks, db)
 		fullPath := filepath.Join(target.BasePath, relPath)
 
 		if dryRun {
@@ -68,7 +91,7 @@ var publishCmd = &cobra.Command{
 			return fmt.Errorf("writing file %s: %w", fullPath, err)
 		}
 
-		frontMatter := publish.GenerateFrontMatter(note, now, draft)
+		frontMatter := publish.GenerateFrontMatter(note, date, draft)
 		pl, err := db.CreatePublishLog(note.ID, target.ID, relPath, frontMatter)
 		if err != nil {
 			return fmt.Errorf("recording publish log: %w", err)
@@ -129,7 +152,7 @@ var publishSetupCmd = &cobra.Command{
 
 var publishListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List publish targets and recent publications",
+	Short: "List publish targets, or a target's publications with --target",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		targetName, _ := cmd.Flags().GetString("target")
 
@@ -252,6 +275,26 @@ func resolveNoteSlug(noteID string) string {
 		return noteID[:8]
 	}
 	return note.Slug
+}
+
+// freePostPath is the post path for a note's first publish, with -2, -3
+// added to the slug when another note's post (one renamed since, say) or a
+// file kb did not write already has the name.
+func freePostPath(basePath, postsDir string, note *model.Note, date time.Time, posts map[string]store.PublishedPost) string {
+	taken := map[string]bool{}
+	for noteID, post := range posts {
+		if noteID != note.ID {
+			taken[post.Path] = true
+		}
+	}
+	slug := note.Slug
+	for n := 2; ; n++ {
+		relPath := publish.PostFilePath(postsDir, slug, date)
+		if _, err := os.Stat(filepath.Join(basePath, relPath)); !taken[relPath] && os.IsNotExist(err) {
+			return relPath
+		}
+		slug = fmt.Sprintf("%s-%d", note.Slug, n)
+	}
 }
 
 func init() {

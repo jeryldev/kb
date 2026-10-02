@@ -106,8 +106,18 @@ func (d *DB) ListPublishTargets() ([]*model.PublishTarget, error) {
 	return targets, rows.Err()
 }
 
+// DeletePublishTarget forgets a site and its publish history. The posts
+// already written to the site are left alone.
 func (d *DB) DeletePublishTarget(id string) error {
-	result, err := d.conn.Exec("DELETE FROM publish_targets WHERE id = ?", id)
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("DELETE FROM publish_log WHERE target_id = ?", id); err != nil {
+		return fmt.Errorf("deleting publish history: %w", err)
+	}
+	result, err := tx.Exec("DELETE FROM publish_targets WHERE id = ?", id)
 	if err != nil {
 		return fmt.Errorf("deleting publish target: %w", err)
 	}
@@ -118,7 +128,7 @@ func (d *DB) DeletePublishTarget(id string) error {
 	if rows == 0 {
 		return fmt.Errorf("publish target not found")
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (d *DB) CreatePublishLog(noteID, targetID, filePath, frontMatter string) (*model.PublishLog, error) {
@@ -149,7 +159,7 @@ func (d *DB) GetLatestPublishLog(noteID, targetID string) (*model.PublishLog, er
 	err := d.conn.QueryRow(
 		`SELECT id, note_id, target_id, file_path, front_matter, published_at
 		 FROM publish_log WHERE note_id = ? AND target_id = ?
-		 ORDER BY published_at DESC LIMIT 1`,
+		 ORDER BY published_at DESC, rowid DESC LIMIT 1`,
 		noteID, targetID,
 	).Scan(&pl.ID, &pl.NoteID, &pl.TargetID, &pl.FilePath, &pl.FrontMatter, &pl.PublishedAt)
 	if err == sql.ErrNoRows {
@@ -184,26 +194,37 @@ func (d *DB) ListPublishLogs(targetID string) ([]*model.PublishLog, error) {
 	return logs, rows.Err()
 }
 
-func (d *DB) GetPublishedNoteSlugs(targetID string) (map[string]string, error) {
+// PublishedPost is a note's most recent post on a target.
+type PublishedPost struct {
+	Path  string
+	Draft bool
+}
+
+// GetPublishedPosts maps each note published to the target to its most
+// recent post there.
+func (d *DB) GetPublishedPosts(targetID string) (map[string]PublishedPost, error) {
 	rows, err := d.conn.Query(
-		`SELECT DISTINCT n.slug, pl.file_path
-		 FROM publish_log pl
-		 JOIN notes n ON n.id = pl.note_id
-		 WHERE pl.target_id = ?`,
+		`SELECT note_id, file_path, front_matter FROM publish_log
+		 WHERE target_id = ?
+		 ORDER BY published_at, rowid`,
 		targetID,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("querying published note slugs: %w", err)
+		return nil, fmt.Errorf("querying published posts: %w", err)
 	}
 	defer rows.Close()
 
-	slugs := make(map[string]string)
+	posts := make(map[string]PublishedPost)
 	for rows.Next() {
-		var slug, filePath string
-		if err := rows.Scan(&slug, &filePath); err != nil {
-			return nil, fmt.Errorf("scanning slug: %w", err)
+		var noteID, filePath, frontMatter string
+		if err := rows.Scan(&noteID, &filePath, &frontMatter); err != nil {
+			return nil, fmt.Errorf("scanning published post: %w", err)
 		}
-		slugs[slug] = filePath
+		// Later rows are newer. A draft is a post with published: false.
+		posts[noteID] = PublishedPost{
+			Path:  filePath,
+			Draft: strings.Contains(frontMatter, "\npublished: false\n"),
+		}
 	}
-	return slugs, rows.Err()
+	return posts, rows.Err()
 }

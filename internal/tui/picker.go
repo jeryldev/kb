@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/jeryldev/kb/internal/model"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -38,9 +39,12 @@ type workspacesLoadedMsg struct {
 }
 
 func (a *App) initPicker() tea.Cmd {
-	if a.boardName != "" {
+	// The board named at start-up opens once; after that the picker is the
+	// picker, or "b" from that board would land straight back on it.
+	if name := a.boardName; name != "" {
+		a.boardName = ""
 		return func() tea.Msg {
-			board, err := a.db.GetBoardByName(a.boardName)
+			board, err := a.db.GetBoardByName(name)
 			if err != nil {
 				return errMsg{err}
 			}
@@ -340,8 +344,8 @@ func (a *App) updateWSContentCreating(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.wsContent.input = string(runes[:len(runes)-1])
 		}
 	default:
-		if len(msg.String()) == 1 {
-			a.wsContent.input += msg.String()
+		if text, ok := typedText(msg); ok {
+			a.wsContent.input += text
 		}
 	}
 	return a, nil
@@ -504,6 +508,11 @@ func (a *App) viewWSContent() string {
 		rows = append(rows, helpStyle.Render(a.wsContent.feedback))
 	}
 
+	// One long row would widen the whole view past the terminal, title bar
+	// and all, so each row is cut to the space inside the padding.
+	for i, row := range rows {
+		rows[i] = ansi.Truncate(row, max(1, w-4), "…")
+	}
 	content := lipgloss.JoinVertical(lipgloss.Left, rows...)
 	padded := lipgloss.NewStyle().Padding(1, 2).Height(contentHeight).Render(content)
 	return lipgloss.JoinVertical(lipgloss.Left, titleBar, padded, statusBar)

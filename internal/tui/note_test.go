@@ -373,34 +373,6 @@ func TestNoteViewBackToPickerNoWorkspace(t *testing.T) {
 	}
 }
 
-func TestResolveEditor(t *testing.T) {
-	editor := resolveEditor()
-	if editor == "" {
-		t.Skip("no editor found on system")
-	}
-	name := editorDisplayName(editor)
-	if name == "" {
-		t.Error("editorDisplayName returned empty string")
-	}
-}
-
-func TestEditorDisplayName(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"/usr/bin/nvim", "nvim"},
-		{"/usr/local/bin/vim", "vim"},
-		{"nano", "nano"},
-	}
-	for _, tt := range tests {
-		got := editorDisplayName(tt.input)
-		if got != tt.want {
-			t.Errorf("editorDisplayName(%q) = %q, want %q", tt.input, got, tt.want)
-		}
-	}
-}
-
 func TestNoteViewShowsEditorHint(t *testing.T) {
 	app := &App{
 		mode: modeNoteView,

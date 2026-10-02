@@ -13,8 +13,13 @@ type mockResolver struct {
 	notes map[string]*model.Note
 }
 
-func (m *mockResolver) GetNoteBySlug(slug string) (*model.Note, error) {
-	if n, ok := m.notes[slug]; ok {
+// ResolveNoteRef finds notes by their key, which also stands in for the
+// note's id when the test leaves it empty.
+func (m *mockResolver) ResolveNoteRef(ref string) (*model.Note, error) {
+	if n, ok := m.notes[ref]; ok {
+		if n.ID == "" {
+			n.ID = ref
+		}
 		return n, nil
 	}
 	return nil, fmt.Errorf("not found")
@@ -128,8 +133,9 @@ func TestResolveWikilinksWithDisplayText(t *testing.T) {
 		"target": "/blog/2026/02/24/target/",
 	}
 
+	resolver := &mockResolver{notes: map[string]*model.Note{"target": {Title: "Target"}}}
 	body := "Check [[target|my link text]] here."
-	got := ResolveWikilinks(body, published, nil)
+	got := ResolveWikilinks(body, published, resolver)
 	want := "Check [my link text](/blog/2026/02/24/target/) here."
 
 	if got != want {
@@ -256,5 +262,51 @@ func TestExtractExcerptTruncates(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, "...") {
 		t.Errorf("expected ... suffix, got %q", got[len(got)-5:])
+	}
+}
+
+type nameResolver map[string]*model.Note
+
+// ResolveNoteRef ignores #heading and ^block, as the store's resolver does.
+func (m nameResolver) ResolveNoteRef(ref string) (*model.Note, error) {
+	if i := strings.IndexAny(ref, "#^"); i >= 0 {
+		ref = ref[:i]
+	}
+	if n, ok := m[strings.ToLower(ref)]; ok {
+		return n, nil
+	}
+	return nil, fmt.Errorf("not found")
+}
+
+func TestResolveWikilinksByAnyNameAndHeading(t *testing.T) {
+	dt := &model.Note{ID: "id-dt", Title: "Dual Transformation"}
+	other := &model.Note{ID: "id-other", Title: "Private Thoughts"}
+	resolver := nameResolver{"dual transformation": dt, "dt": dt, "private thoughts": other}
+	permalinks := map[string]string{"id-dt": "/blog/2026/05/13/dual-transformation/"}
+
+	body := "[[Dual Transformation]], [[DT#Phase 2|phase two]], [[Private Thoughts]], [[Nowhere]], [[card:abc]]"
+	got := ResolveWikilinks(body, permalinks, resolver)
+	want := "[Dual Transformation](/blog/2026/05/13/dual-transformation/), " +
+		"[phase two](/blog/2026/05/13/dual-transformation/), Private Thoughts, Nowhere, abc"
+	if got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+func TestResolveWikilinksStaysOnOneLine(t *testing.T) {
+	body := "a stray [[ opener\nand [[Real]] link"
+	got := ResolveWikilinks(body, nil, nameResolver{})
+	if got != "a stray [[ opener\nand Real link" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestPermalinkFromPostPath(t *testing.T) {
+	got, ok := PermalinkFromPostPath("_posts/2026-05-13-dual-transformation.md")
+	if !ok || got != "/blog/2026/05/13/dual-transformation/" {
+		t.Errorf("got %q, %v", got, ok)
+	}
+	if _, ok := PermalinkFromPostPath("_posts/not-a-post.md"); ok {
+		t.Error("a path without a date should not give a permalink")
 	}
 }

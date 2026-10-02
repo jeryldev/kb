@@ -91,3 +91,14 @@ func TestExtractMarkdownLinks(t *testing.T) {
 		t.Errorf("link[0] = %+v, want url/https://example.com", got[0])
 	}
 }
+
+func TestParseWikilinksDoNotSpanLines(t *testing.T) {
+	text := "a stray [[ opener\nmore prose\nand a real [[Target]] link"
+	links := ParseWikilinks(text)
+	if len(links) != 1 || links[0].TargetRef != "Target" {
+		t.Fatalf("links = %+v", links)
+	}
+	if links[0].Context != "and a real [[Target]] link" {
+		t.Errorf("context = %q", links[0].Context)
+	}
+}

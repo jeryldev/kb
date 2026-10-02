@@ -133,9 +133,7 @@ func (a *App) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "esc":
 			if a.board.filter != "" {
-				a.board.filter = ""
-				a.board.focusCard = 0
-				a.clampCardSelection()
+				a.setFilter("")
 			}
 		case "/":
 			a.board.filtering = true
@@ -258,19 +256,19 @@ func (a *App) cancelMoving() {
 func (a *App) updateBoardFiltering(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "enter":
-		a.board.filter = strings.TrimSpace(a.board.filterInput)
 		a.board.filtering = false
+		a.setFilter(strings.TrimSpace(a.board.filterInput))
 	case "esc":
 		a.board.filtering = false
-		a.board.filter = ""
+		a.setFilter("")
 	case "backspace":
 		if len(a.board.filterInput) > 0 {
 			runes := []rune(a.board.filterInput)
 			a.board.filterInput = string(runes[:len(runes)-1])
 		}
 	default:
-		if len(msg.String()) == 1 {
-			a.board.filterInput += msg.String()
+		if text, ok := typedText(msg); ok {
+			a.board.filterInput += text
 		}
 	}
 	return a, nil
@@ -567,10 +565,27 @@ func (a *App) cardFormWidth() int {
 
 func (a *App) togglePriorityFilter(priority string) {
 	if a.board.filter == priority {
-		a.board.filter = ""
+		a.setFilter("")
 	} else {
-		a.board.filter = priority
+		a.setFilter(priority)
 	}
+}
+
+// setFilter changes which cards are shown while keeping the same card
+// selected; if the filter hides it, the column's first match is selected.
+func (a *App) setFilter(filter string) {
+	selected := a.selectedCard()
+	a.board.filter = filter
+	a.board.focusCard = 0
+	if selected != nil && a.board.focusCol < len(a.board.columns) {
+		for i, card := range a.filteredCards(a.board.columns[a.board.focusCol].ID) {
+			if card.ID == selected.ID {
+				a.board.focusCard = i
+				break
+			}
+		}
+	}
+	a.clampCardSelection()
 }
 
 func (a *App) viewBoard() string {

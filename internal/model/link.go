@@ -12,8 +12,10 @@ type Link struct {
 	SourceID   string
 	TargetType string
 	TargetID   string
-	Context    string
-	CreatedAt  time.Time
+	// TargetRef is the link as written, e.g. "Some Note" for [[Some Note]].
+	TargetRef string
+	Context   string
+	CreatedAt time.Time
 }
 
 type ParsedLink struct {
@@ -23,7 +25,7 @@ type ParsedLink struct {
 	Context    string
 }
 
-var wikilinkRe = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
+var wikilinkRe = regexp.MustCompile(`\[\[([^\]\n]+)\]\]`)
 
 func ParseWikilinks(text string) []ParsedLink {
 	matches := wikilinkRe.FindAllStringSubmatchIndex(text, -1)
@@ -93,4 +95,34 @@ func ExtractMarkdownLinks(text string) []ParsedLink {
 	}
 
 	return links
+}
+
+// ReplaceWikilinks replaces each [[target]] or [[target|display]] in text
+// with what replace returns for it. Links never span lines.
+func ReplaceWikilinks(text string, replace func(target, display string, hasDisplay bool) string) string {
+	return wikilinkRe.ReplaceAllStringFunc(text, func(link string) string {
+		target, display, hasDisplay := strings.Cut(link[2:len(link)-2], "|")
+		return replace(target, display, hasDisplay)
+	})
+}
+
+// RewriteWikilinks replaces the target of each [[target]] or
+// [[target|display]] in text for which rewrite returns a new target and
+// true, keeping the display text. It returns the new text and how many
+// links changed.
+func RewriteWikilinks(text string, rewrite func(target string) (string, bool)) (string, int) {
+	changed := 0
+	out := ReplaceWikilinks(text, func(target, display string, hasDisplay bool) string {
+		replacement, ok := rewrite(target)
+		if !ok {
+			replacement = target
+		} else {
+			changed++
+		}
+		if hasDisplay {
+			return "[[" + replacement + "|" + display + "]]"
+		}
+		return "[[" + replacement + "]]"
+	})
+	return out, changed
 }

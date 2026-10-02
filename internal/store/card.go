@@ -26,8 +26,16 @@ func (d *DB) CreateCard(columnID, title string, priority model.Priority) (*model
 		return nil, err
 	}
 
+	// One immediate transaction, so the position read and the write that
+	// uses it cannot interleave with another kb process doing the same.
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+
 	var maxPos int
-	err := d.conn.QueryRow(
+	err = tx.QueryRow(
 		"SELECT COALESCE(MAX(position), -1) FROM cards WHERE column_id = ? AND deleted_at IS NULL",
 		columnID,
 	).Scan(&maxPos)
@@ -46,7 +54,7 @@ func (d *DB) CreateCard(columnID, title string, priority model.Priority) (*model
 		UpdatedAt: now,
 	}
 
-	_, err = d.conn.Exec(
+	_, err = tx.Exec(
 		`INSERT INTO cards (id, column_id, title, description, priority, position, labels, external_id, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		card.ID, card.ColumnID, card.Title, card.Description, string(card.Priority),
@@ -56,6 +64,9 @@ func (d *DB) CreateCard(columnID, title string, priority model.Priority) (*model
 		return nil, fmt.Errorf("inserting card: %w", err)
 	}
 
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("committing: %w", err)
+	}
 	return card, nil
 }
 
@@ -141,9 +152,17 @@ func (d *DB) UpdateCard(card *model.Card) error {
 }
 
 func (d *DB) MoveCard(cardID, targetColumnID string) error {
+	// One immediate transaction, so the position read and the write that
+	// uses it cannot interleave with another kb process doing the same.
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+
 	// Verify card and target column belong to the same board
 	var cardBoardID, colBoardID string
-	err := d.conn.QueryRow(
+	err = tx.QueryRow(
 		`SELECT c.board_id FROM columns c
 		 JOIN cards ca ON ca.column_id = c.id
 		 WHERE ca.id = ? AND ca.deleted_at IS NULL`, cardID,
@@ -151,7 +170,7 @@ func (d *DB) MoveCard(cardID, targetColumnID string) error {
 	if err != nil {
 		return fmt.Errorf("finding card's board: %w", err)
 	}
-	err = d.conn.QueryRow(
+	err = tx.QueryRow(
 		"SELECT board_id FROM columns WHERE id = ?", targetColumnID,
 	).Scan(&colBoardID)
 	if err != nil {
@@ -162,7 +181,7 @@ func (d *DB) MoveCard(cardID, targetColumnID string) error {
 	}
 
 	var maxPos int
-	err = d.conn.QueryRow(
+	err = tx.QueryRow(
 		"SELECT COALESCE(MAX(position), -1) FROM cards WHERE column_id = ? AND deleted_at IS NULL",
 		targetColumnID,
 	).Scan(&maxPos)
@@ -171,14 +190,14 @@ func (d *DB) MoveCard(cardID, targetColumnID string) error {
 	}
 
 	now := time.Now().UTC()
-	_, err = d.conn.Exec(
+	_, err = tx.Exec(
 		"UPDATE cards SET column_id = ?, position = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
 		targetColumnID, maxPos+1, now, cardID,
 	)
 	if err != nil {
 		return fmt.Errorf("moving card: %w", err)
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (d *DB) ArchiveCard(id string) error {

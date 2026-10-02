@@ -88,3 +88,22 @@ func TestNoteHasTag(t *testing.T) {
 		t.Error("expected HasTag('rust') to be false")
 	}
 }
+
+func TestFileName(t *testing.T) {
+	cases := map[string]string{
+		"Dual Transformation Playbook": "Dual Transformation Playbook",
+		"C++: a primer":                "C++ a primer",
+		"a/b\\c":                       "a b c",
+		`What? "Why" <now> | later*`:   "What Why now later",
+		"[[Linked]] #tag ^block":       "Linked tag block",
+		"  .hidden. ":                  "hidden",
+		"日本語のノート":                      "日本語のノート",
+		"tab\there\nnewline":           "tab here newline",
+		"???":                          "",
+	}
+	for in, want := range cases {
+		if got := FileName(in); got != want {
+			t.Errorf("FileName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

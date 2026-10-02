@@ -17,7 +17,7 @@ import (
 
 func setupTestDB(t *testing.T) {
 	t.Helper()
-	testDB, err := store.OpenWithPath(":memory:")
+	testDB, err := store.OpenWithPath(":memory:", t.TempDir())
 	if err != nil {
 		t.Fatalf("opening test db: %v", err)
 	}
@@ -2426,5 +2426,244 @@ func TestGraphWorkspaceNotFound(t *testing.T) {
 	_, err := executeCmdErr(t, "graph", "--workspace", "nonexistent")
 	if err == nil {
 		t.Error("expected error for nonexistent workspace")
+	}
+}
+
+func TestIndexReportsTheVaultAndRebuilds(t *testing.T) {
+	setupTestDB(t)
+	executeCmd(t, "notes", "create", "Indexed", "--json")
+	os.WriteFile(filepath.Join(db.Vault().Root(), "dropped.md"), []byte("from another editor"), 0o644)
+
+	out := executeCmd(t, "index")
+	if !strings.Contains(out, db.Vault().Root()) || !strings.Contains(out, "1 added") || !strings.Contains(out, "2 notes") {
+		t.Errorf("index output:\n%s", out)
+	}
+	out = executeCmd(t, "index", "--rebuild")
+	if !strings.Contains(out, "2 updated") {
+		t.Errorf("rebuild output:\n%s", out)
+	}
+}
+
+// fakeEditor makes $EDITOR append a line to the file it is given, as a
+// person typing into it would.
+func fakeEditor(t *testing.T, line string) {
+	t.Helper()
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", `sh -c 'printf "\n`+line+`" >> "$0"'`)
+}
+
+func TestOpenEditsTheNoteFileByAnyName(t *testing.T) {
+	setupTestDB(t)
+	executeCmd(t, "notes", "create", "Dual Transformation", "--body", "start", "--json")
+	fakeEditor(t, "typed in the editor")
+
+	executeCmd(t, "open", "dual transformation")
+
+	note, err := db.GetNoteBySlug("dual-transformation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(note.Body, "typed in the editor") {
+		t.Errorf("index not refreshed after editing: %q", note.Body)
+	}
+}
+
+func TestDailyCreatesThenReopensTodaysNote(t *testing.T) {
+	setupTestDB(t)
+	t.Setenv("KB_DAILY_DIR", "journal")
+	fakeEditor(t, "- did a thing")
+
+	executeCmd(t, "daily", "--date", "2026-10-02")
+	executeCmd(t, "daily", "--date", "2026-10-02")
+
+	data, err := os.ReadFile(filepath.Join(db.Vault().Root(), "journal", "2026-10-02.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(data), "- did a thing") != 2 {
+		t.Errorf("daily note:\n%s", data)
+	}
+	notes, _ := db.ListNotes()
+	if len(notes) != 1 || notes[0].Title != "2026-10-02" {
+		t.Errorf("notes = %+v", notes)
+	}
+	if _, err := executeCmdErr(t, "daily", "--date", "2 Oct"); err == nil {
+		t.Error("expected an error for a malformed date")
+	}
+}
+
+func TestRenameRewritesLinks(t *testing.T) {
+	setupTestDB(t)
+	executeCmd(t, "notes", "create", "Old Name", "--json")
+	executeCmd(t, "notes", "create", "Linker", "--body", "see [[Old Name]]", "--json")
+
+	out := executeCmd(t, "notes", "rename", "old-name", "New Name")
+	if !strings.Contains(out, "New Name") || !strings.Contains(out, "1 note") {
+		t.Errorf("output: %s", out)
+	}
+	linker, _ := db.GetNoteBySlug("linker")
+	if linker.Body != "see [[New Name]]" {
+		t.Errorf("linker body = %q", linker.Body)
+	}
+}
+
+func TestTagsListsCounts(t *testing.T) {
+	setupTestDB(t)
+	executeCmd(t, "notes", "create", "A", "--tags", "go,tools", "--json")
+	executeCmd(t, "notes", "create", "B", "--tags", "go", "--json")
+	out := executeCmd(t, "tags")
+	if !strings.Contains(out, "go") || !strings.Contains(out, "2") || !strings.Contains(out, "tools") {
+		t.Errorf("tags output:\n%s", out)
+	}
+	if strings.Index(out, "go") > strings.Index(out, "tools") {
+		t.Errorf("most used should come first:\n%s", out)
+	}
+}
+
+func TestNoteSearchSubcommandAndStrayArgs(t *testing.T) {
+	setupTestDB(t)
+	executeCmd(t, "notes", "create", "Go Patterns", "--body", "Concurrency patterns", "--json")
+	executeCmd(t, "notes", "create", "Rust Guide", "--body", "Memory safety", "--json")
+
+	out := executeCmd(t, "notes", "search", "concurrency")
+	if !strings.Contains(out, "go-patterns") || strings.Contains(out, "rust-guide") {
+		t.Errorf("search output:\n%s", out)
+	}
+	if _, err := executeCmdErr(t, "notes", "serch", "x"); err == nil {
+		t.Error("a mistyped subcommand should be an error, not a full listing")
+	}
+}
+
+func TestShowFindsANoteByTitle(t *testing.T) {
+	setupTestDB(t)
+	executeCmd(t, "notes", "create", "Six Paths Framework", "--json")
+	out := executeCmd(t, "notes", "show", "six paths framework")
+	if !strings.Contains(out, "Six Paths Framework") {
+		t.Errorf("output: %s", out)
+	}
+}
+
+func TestPublishDatesPostsByCreationAndLinksEarlierPosts(t *testing.T) {
+	setupTestDB(t)
+	site := t.TempDir()
+	executeCmd(t, "publish", "setup", "site", "--engine", "jekyll", "--path", site, "--json")
+	root := db.Vault().Root()
+	os.WriteFile(filepath.Join(root, "Dual Transformation.md"), []byte("---\ncreated: 2026-05-13\n---\nThe book."), 0o644)
+	os.WriteFile(filepath.Join(root, "Offsite.md"), []byte("---\ncreated: 2026-06-02\n---\nRead [[dual transformation#Part 2|part two]] first."), 0o644)
+	if _, err := db.Scan(); err != nil {
+		t.Fatal(err)
+	}
+
+	executeCmd(t, "publish", "dual-transformation")
+	// Republished on another day, it must update the same post, not add one.
+	executeCmd(t, "publish", "dual-transformation")
+	posts, _ := filepath.Glob(filepath.Join(site, "_posts", "*.md"))
+	if len(posts) != 1 || filepath.Base(posts[0]) != "2026-05-13-dual-transformation.md" {
+		t.Fatalf("posts = %v", posts)
+	}
+
+	executeCmd(t, "publish", "offsite")
+	data, err := os.ReadFile(filepath.Join(site, "_posts", "2026-06-02-offsite.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "Read [part two](/blog/2026/05/13/dual-transformation/) first.") {
+		t.Errorf("post:\n%s", data)
+	}
+	if !strings.Contains(string(data), "date: 2026-06-02") {
+		t.Errorf("post date:\n%s", data)
+	}
+}
+
+func publishSite(t *testing.T) string {
+	t.Helper()
+	site := t.TempDir()
+	executeCmd(t, "publish", "setup", "site", "--engine", "jekyll", "--path", site, "--json")
+	return site
+}
+
+func vaultNote(t *testing.T, rel, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(db.Vault().Root(), rel), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Scan(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPublishUsesTheWritersCalendarDate(t *testing.T) {
+	setupTestDB(t)
+	site := publishSite(t)
+	// Written at 4am on 2 Oct in Manila, which is still 1 Oct in UTC.
+	orig := time.Local
+	time.Local = time.FixedZone("Manila", 8*3600)
+	t.Cleanup(func() { time.Local = orig })
+	vaultNote(t, "Morning.md", "---\ncreated: 2026-10-01T20:00:00Z\n---\nx")
+
+	executeCmd(t, "publish", "morning")
+	if _, err := os.Stat(filepath.Join(site, "_posts", "2026-10-02-morning.md")); err != nil {
+		posts, _ := filepath.Glob(filepath.Join(site, "_posts", "*"))
+		t.Errorf("post not dated 2026-10-02: %v", posts)
+	}
+}
+
+func TestPublishNeverOverwritesAnotherNotesPost(t *testing.T) {
+	setupTestDB(t)
+	site := publishSite(t)
+	vaultNote(t, "Foo.md", "---\ncreated: 2026-05-13\n---\nthe first note")
+	executeCmd(t, "publish", "foo")
+	executeCmd(t, "notes", "rename", "foo", "Bar")
+	executeCmd(t, "publish", "bar") // keeps its post at the old URL
+
+	vaultNote(t, "Foo.md", "---\ncreated: 2026-05-13\n---\na different note")
+	executeCmd(t, "publish", "foo")
+
+	first, _ := os.ReadFile(filepath.Join(site, "_posts", "2026-05-13-foo.md"))
+	if !strings.Contains(string(first), "the first note") {
+		t.Errorf("the first post was overwritten:\n%s", first)
+	}
+	second, err := os.ReadFile(filepath.Join(site, "_posts", "2026-05-13-foo-2.md"))
+	if err != nil || !strings.Contains(string(second), "a different note") {
+		t.Errorf("second post: %v\n%s", err, second)
+	}
+}
+
+func TestPublishDoesNotLinkToDrafts(t *testing.T) {
+	setupTestDB(t)
+	site := publishSite(t)
+	vaultNote(t, "Secret.md", "---\ncreated: 2026-05-13\n---\nnot yet")
+	vaultNote(t, "Public.md", "---\ncreated: 2026-05-14\n---\nsee [[Secret]]")
+	executeCmd(t, "publish", "secret", "--draft")
+	executeCmd(t, "publish", "public")
+
+	data, _ := os.ReadFile(filepath.Join(site, "_posts", "2026-05-14-public.md"))
+	if !strings.Contains(string(data), "see Secret") || strings.Contains(string(data), "](/blog") {
+		t.Errorf("a draft was linked:\n%s", data)
+	}
+}
+
+func TestPublishTargetCanBeDeletedAfterPublishing(t *testing.T) {
+	setupTestDB(t)
+	publishSite(t)
+	vaultNote(t, "Post.md", "---\ncreated: 2026-05-13\n---\nx")
+	executeCmd(t, "publish", "post")
+	executeCmd(t, "publish", "delete", "site")
+	out := executeCmd(t, "publish", "list")
+	if !strings.Contains(out, "No publish targets") {
+		t.Errorf("target still listed:\n%s", out)
+	}
+}
+
+func TestPublishedExcerptHasNoWikilinkBrackets(t *testing.T) {
+	setupTestDB(t)
+	site := publishSite(t)
+	vaultNote(t, "Other.md", "---\ncreated: 2026-05-12\n---\nother")
+	vaultNote(t, "Post.md", "---\ncreated: 2026-05-13\n---\nRead [[Other]] and [[card:Some card]] first.")
+	executeCmd(t, "publish", "other")
+	executeCmd(t, "publish", "post")
+	data, _ := os.ReadFile(filepath.Join(site, "_posts", "2026-05-13-post.md"))
+	if !strings.Contains(string(data), `excerpt: "Read Other and Some card first."`) {
+		t.Errorf("excerpt:\n%s", data)
 	}
 }
