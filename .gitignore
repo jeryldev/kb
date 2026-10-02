@@ -4,3 +4,4 @@ dist/
 .DS_Store
 .research/
 firebase-debug.log
+tools/kanban-compat/harness.js
