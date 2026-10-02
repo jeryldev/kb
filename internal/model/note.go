@@ -15,9 +15,11 @@ type Note struct {
 	Tags        string
 	Pinned      bool
 	WorkspaceID string
-	ArchivedAt  *time.Time
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// Path is the note's file, relative to the vault.
+	Path       string
+	ArchivedAt *time.Time
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 func (n *Note) TagList() []string {

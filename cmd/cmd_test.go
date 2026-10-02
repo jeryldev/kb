@@ -17,7 +17,7 @@ import (
 
 func setupTestDB(t *testing.T) {
 	t.Helper()
-	testDB, err := store.OpenWithPath(":memory:")
+	testDB, err := store.OpenWithPath(":memory:", t.TempDir())
 	if err != nil {
 		t.Fatalf("opening test db: %v", err)
 	}

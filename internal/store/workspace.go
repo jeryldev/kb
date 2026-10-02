@@ -118,14 +118,22 @@ func (d *DB) UpdateWorkspace(ws *model.Workspace) error {
 		return err
 	}
 
+	before, err := d.GetWorkspace(ws.ID)
+	if err != nil {
+		return err
+	}
 	ws.UpdatedAt = time.Now().UTC()
-	_, err := d.conn.Exec(
+	_, err = d.conn.Exec(
 		`UPDATE workspaces SET name = ?, kind = ?, description = ?, path = ?, updated_at = ?
 		 WHERE id = ?`,
 		ws.Name, string(ws.Kind), ws.Description, ws.Path, ws.UpdatedAt, ws.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("updating workspace: %w", err)
+	}
+	// Note files name their workspace, so a rename has to reach them.
+	if before.Name != ws.Name {
+		return d.rewriteWorkspaceInFiles(ws.ID)
 	}
 	return nil
 }

@@ -14,7 +14,13 @@ func (d *DB) SyncNoteLinks(note *model.Note) error {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback()
+	if err := syncLinksTx(tx, note); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
 
+func syncLinksTx(tx *sql.Tx, note *model.Note) error {
 	if _, err := tx.Exec(
 		"DELETE FROM links WHERE source_type = 'note' AND source_id = ?", note.ID,
 	); err != nil {
@@ -42,8 +48,7 @@ func (d *DB) SyncNoteLinks(note *model.Note) error {
 			return fmt.Errorf("inserting link: %w", err)
 		}
 	}
-
-	return tx.Commit()
+	return nil
 }
 
 func (d *DB) GetForwardLinks(sourceType, sourceID string) ([]*model.Link, error) {

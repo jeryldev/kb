@@ -31,6 +31,9 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("opening database: %w", err)
 		}
+		for _, problem := range db.Problems() {
+			fmt.Fprintf(os.Stderr, "kb: warning: %s\n", problem)
+		}
 		return nil
 	},
 	PersistentPostRunE: func(cmd *cobra.Command, args []string) error {

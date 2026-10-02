@@ -5,53 +5,79 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jeryldev/kb/internal/model"
+	"github.com/jeryldev/kb/internal/vault"
 	_ "modernc.org/sqlite"
 )
 
 type DB struct {
-	conn *sql.DB
+	conn  *sql.DB
+	vault *vault.Vault
+	// problems from the scan on open, for the caller to report.
+	problems []string
 }
 
+// Open opens the index at the default location over the vault named by
+// KB_VAULT, or ~/notes.
 func Open() (*DB, error) {
 	dbPath, err := dbPath()
 	if err != nil {
 		return nil, err
 	}
-
+	vaultDir, err := VaultDir()
+	if err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return nil, fmt.Errorf("creating data directory: %w", err)
 	}
+	return OpenWithPath(dbPath, vaultDir)
+}
 
-	conn, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(wal)&_pragma=foreign_keys(on)")
+// OpenWithPath opens (or creates) the index at path, migrates it, moves any
+// notes still stored only in SQLite out to the vault, and scans the vault.
+func OpenWithPath(path, vaultDir string) (*DB, error) {
+	// One connection: SQLite has a single writer anyway, and ":memory:" is a
+	// separate database per connection. busy_timeout makes a second kb
+	// process wait for the lock instead of failing with SQLITE_BUSY, and
+	// immediate transactions take that lock up front, so a read-then-write
+	// transaction cannot deadlock against another process.
+	conn, err := sql.Open("sqlite", path+
+		"?_pragma=journal_mode(wal)&_pragma=foreign_keys(on)&_pragma=busy_timeout(10000)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
+	conn.SetMaxOpenConns(1)
 
-	db := &DB{conn: conn}
+	db := &DB{conn: conn, vault: vault.New(vaultDir)}
 	if err := db.migrate(); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("running migrations: %w", err)
 	}
+	if err := db.exportLegacyNotes(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("moving notes to the vault: %w", err)
+	}
+	res, err := db.Scan()
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("scanning the vault: %w", err)
+	}
+	db.problems = res.Problems
 
 	return db, nil
 }
 
-func OpenWithPath(path string) (*DB, error) {
-	conn, err := sql.Open("sqlite", path+"?_pragma=journal_mode(wal)&_pragma=foreign_keys(on)")
-	if err != nil {
-		return nil, fmt.Errorf("opening database: %w", err)
-	}
+func (d *DB) Vault() *vault.Vault {
+	return d.vault
+}
 
-	db := &DB{conn: conn}
-	if err := db.migrate(); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("running migrations: %w", err)
-	}
-
-	return db, nil
+// Problems lists files the scan on open could only partly read.
+func (d *DB) Problems() []string {
+	return d.problems
 }
 
 func (d *DB) Close() error {
@@ -115,6 +141,11 @@ func (d *DB) migrate() error {
 	}
 	if version < 5 {
 		if err := d.migrate005(); err != nil {
+			return err
+		}
+	}
+	if version < 6 {
+		if err := d.migrate006(); err != nil {
 			return err
 		}
 	}
@@ -328,6 +359,51 @@ func (d *DB) migrate005() error {
 	}
 
 	return tx.Commit()
+}
+
+// migrate006 makes the notes table an index of the vault: each row records
+// the file it came from and the mtime and size it had when it was read.
+func (d *DB) migrate006() error {
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning migration transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	schema := `
+		ALTER TABLE notes ADD COLUMN path TEXT;
+		ALTER TABLE notes ADD COLUMN mtime INTEGER NOT NULL DEFAULT 0;
+		ALTER TABLE notes ADD COLUMN size INTEGER NOT NULL DEFAULT 0;
+		ALTER TABLE notes ADD COLUMN aliases TEXT NOT NULL DEFAULT '';
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_notes_path ON notes(path);
+	`
+	if _, err := tx.Exec(schema); err != nil {
+		return fmt.Errorf("applying migration 006: %w", err)
+	}
+	if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (6)"); err != nil {
+		return fmt.Errorf("recording migration 006: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// VaultDir is KB_VAULT, or ~/notes.
+func VaultDir() (string, error) {
+	if dir := os.Getenv("KB_VAULT"); dir != "" {
+		if rest, ok := strings.CutPrefix(dir, "~/"); ok {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "", fmt.Errorf("finding home directory: %w", err)
+			}
+			return filepath.Join(home, rest), nil
+		}
+		return dir, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("finding home directory: %w", err)
+	}
+	return filepath.Join(home, "notes"), nil
 }
 
 func dbPath() (string, error) {
