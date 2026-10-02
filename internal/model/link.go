@@ -23,7 +23,7 @@ type ParsedLink struct {
 	Context    string
 }
 
-var wikilinkRe = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
+var wikilinkRe = regexp.MustCompile(`\[\[([^\]\n]+)\]\]`)
 
 func ParseWikilinks(text string) []ParsedLink {
 	matches := wikilinkRe.FindAllStringSubmatchIndex(text, -1)
