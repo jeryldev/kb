@@ -169,26 +169,41 @@ func (s *Store) findBoard(ref string) (*boardFile, error) {
 	return nil, fmt.Errorf("more than one board is called %q (%s); name it by path", ref, strings.Join(paths, ", "))
 }
 
-// CreateBoard writes a new board, with the usual lanes, in BoardsDir.
-func (s *Store) CreateBoard(name, description, workspaceID string) (*model.Board, error) {
+// BoardPath is the vault path a new board with this name gets, in
+// BoardsDir. It is an error when a board already has the name.
+func (s *Store) BoardPath(name string) (string, error) {
 	if err := model.ValidateBoardName(name); err != nil {
-		return nil, err
+		return "", err
 	}
 	if _, err := s.findBoard(name); err == nil {
-		return nil, fmt.Errorf("board %q already exists", name)
+		return "", fmt.Errorf("board %q already exists", name)
 	}
 	file := model.FileName(name)
 	if file == "" {
-		return nil, fmt.Errorf("%q has no characters a file name can hold", name)
+		return "", fmt.Errorf("%q has no characters a file name can hold", name)
 	}
-	rel := BoardsDir() + "/" + file + ".md"
+	return BoardsDir() + "/" + file + ".md", nil
+}
+
+// CreateBoard writes a new board, with the usual lanes, in BoardsDir.
+func (s *Store) CreateBoard(name, description, workspaceID string) (*model.Board, error) {
 	b := board.New(defaultLanes)
 	if description != "" {
 		b.Front.SetValue("description", description)
 	}
 	b.Front.SetWorkspace(s.workspaceNameForFile(workspaceID))
 	b.MarkFrontmatterChanged()
-	err := s.writeLocked(rel, func() error {
+	return s.CreateBoardFrom(name, b)
+}
+
+// CreateBoardFrom writes a board built by the caller as a new file, in one
+// write, so a board is never left half written.
+func (s *Store) CreateBoardFrom(name string, b *board.Board) (*model.Board, error) {
+	rel, err := s.BoardPath(name)
+	if err != nil {
+		return nil, err
+	}
+	err = s.writeLocked(rel, func() error {
 		_, err := s.vault.Create(rel, &vault.Doc{Body: string(b.Render())})
 		return err
 	})
@@ -199,6 +214,18 @@ func (s *Store) CreateBoard(name, description, workspaceID string) (*model.Board
 		return nil, err
 	}
 	return s.GetBoard(rel)
+}
+
+// BoardsByValue maps each value of a frontmatter key to the board that has
+// it, such as the key the import from kb 0.3 leaves on each board.
+func (s *Store) BoardsByValue(key string) map[string]string {
+	out := map[string]string{}
+	for _, bf := range s.boards {
+		if v := bf.b.Front.Value(key); v != "" {
+			out[v] = bf.path
+		}
+	}
+	return out
 }
 
 // TrashBoard moves a board's file to the vault's .trash folder.
