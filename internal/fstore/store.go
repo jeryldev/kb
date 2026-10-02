@@ -294,3 +294,18 @@ func (s *Store) writeLocked(rel string, fn func() error) error {
 	defer unlock()
 	return fn()
 }
+
+// VaultDir is $KB_VAULT (a leading ~/ is your home folder), or ~/notes.
+func VaultDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("finding home directory: %w", err)
+	}
+	if dir := os.Getenv("KB_VAULT"); dir != "" {
+		if rest, ok := strings.CutPrefix(dir, "~/"); ok {
+			return filepath.Join(home, rest), nil
+		}
+		return dir, nil
+	}
+	return filepath.Join(home, "notes"), nil
+}

@@ -282,3 +282,26 @@ func TestWorkspacesLiveInTheVault(t *testing.T) {
 		t.Error("Default cannot be deleted")
 	}
 }
+
+// Card ids are unique within a board, not across boards: an id (or
+// prefix) on two boards is an error naming both, and a board narrows it.
+func TestFindCardAcrossBoards(t *testing.T) {
+	s := testStore(t)
+	board := "---\nkanban-plugin: board\n---\n\n## Todo\n\n- [ ] %s ^abcd1234\n"
+	put(t, s, "Boards/One.md", fmt.Sprintf(board, "first"))
+	put(t, s, "Boards/Two.md", fmt.Sprintf(board, "second"))
+	if err := s.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.FindCard("", "abcd")
+	if err == nil || !strings.Contains(err.Error(), "One") || !strings.Contains(err.Error(), "Two") {
+		t.Errorf("err = %v, want it to name both boards", err)
+	}
+	c, err := s.FindCard("two", "abcd")
+	if err != nil || c.Title != "second" {
+		t.Errorf("on board two: %v, %v", c, err)
+	}
+	if _, err := s.FindCard("", "abc"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("a 3-character prefix: err = %v, want not found", err)
+	}
+}

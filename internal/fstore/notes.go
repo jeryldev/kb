@@ -356,3 +356,12 @@ func (s *Store) moveToTrash(rel string) (string, error) {
 		}
 	}
 }
+
+// ResolveNoteRef finds the live note a wikilink ref names, as Obsidian
+// would: by title, alias or file name.
+func (s *Store) ResolveNoteRef(ref string) (*Note, error) {
+	if target := s.resolver().resolve(ref); target.typ == "note" {
+		return s.GetNote(target.id)
+	}
+	return nil, fmt.Errorf("note %q: %w", ref, ErrNotFound)
+}

@@ -105,7 +105,6 @@ func archiveOf(b *boardDoc) []*board.Lane {
 	return nil
 }
 
-
 // boardName is used in error messages.
 func boardName(rel string) string { return strings.TrimSuffix(rel, ".md") }
 
@@ -530,4 +529,55 @@ func (s *Store) ArchiveCard(boardID, cardID string) error {
 
 func (s *Store) DeleteCard(boardID, cardID string) error {
 	return s.withBoard(boardID, func(b *boardDoc) error { return b.Delete(cardID) })
+}
+
+// BoardCards lists a board's live cards, lane by lane.
+func (s *Store) BoardCards(boardID string) ([]*model.Card, error) {
+	bf, err := s.findBoard(boardID)
+	if err != nil {
+		return nil, err
+	}
+	var out []*model.Card
+	for _, l := range bf.b.Lanes {
+		for i, it := range l.Items() {
+			out = append(out, s.cardModel(bf, l, i, it))
+		}
+	}
+	return out, nil
+}
+
+// FindCard finds a card by its id, or a prefix of it of 4 characters or
+// more, on one board, or on every board when boardID is empty. Card ids
+// are unique within a board, not across boards, so a match on several
+// boards is an error that names them.
+func (s *Store) FindCard(boardID, ref string) (*model.Card, error) {
+	boards := s.boards
+	if boardID != "" {
+		bf, err := s.findBoard(boardID)
+		if err != nil {
+			return nil, err
+		}
+		boards = []*boardFile{bf}
+	}
+	var matches []*model.Card
+	for _, bf := range boards {
+		for _, l := range append(append([]*board.Lane{}, bf.b.Lanes...), archiveOf(bf.b)...) {
+			for i, it := range l.Items() {
+				if it.ID == ref || (len(ref) >= 4 && strings.HasPrefix(it.ID, ref)) {
+					matches = append(matches, s.cardModel(bf, l, i, it))
+				}
+			}
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return nil, fmt.Errorf("card %q: %w", ref, ErrNotFound)
+	case 1:
+		return matches[0], nil
+	}
+	var where []string
+	for _, m := range matches {
+		where = append(where, m.ID+" on "+stem(m.BoardID))
+	}
+	return nil, fmt.Errorf("%q matches more than one card (%s); use --board or more characters", ref, strings.Join(where, ", "))
 }
