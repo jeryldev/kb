@@ -11,7 +11,7 @@ func TestRenameNoteMovesTheFileAndRewritesLinksToIt(t *testing.T) {
 	db := testDB(t)
 	writeVaultFile(t, db, "ideas/Old Name.md", "---\ncssclass: wide\n---\nthe note")
 	writeVaultFile(t, db, "a.md", "see [[Old Name]] and [[old name#Part 2|that part]], not [[Old Names]]")
-	writeVaultFile(t, db, "b.md", "also [[ideas/Old Name^blk]]\nand `[[Old Name]]` in code stays a link too")
+	writeVaultFile(t, db, "b.md", "also [[ideas/Old Name^blk]]\nand `[[Old Name]]` in code is not a link")
 	writeVaultFile(t, db, "c.md", "unrelated [[Elsewhere]]")
 	scan(t, db)
 	note, _ := db.GetNoteBySlug("old-name")
@@ -37,7 +37,7 @@ func TestRenameNoteMovesTheFileAndRewritesLinksToIt(t *testing.T) {
 	if got := readVaultFile(t, db, "a.md"); got != "see [[New Name]] and [[New Name#Part 2|that part]], not [[Old Names]]" {
 		t.Errorf("a.md = %q", got)
 	}
-	if got := readVaultFile(t, db, "b.md"); !strings.HasPrefix(got, "also [[New Name^blk]]\nand `[[New Name]]`") {
+	if got := readVaultFile(t, db, "b.md"); got != "also [[New Name^blk]]\nand `[[Old Name]]` in code is not a link" {
 		t.Errorf("b.md = %q", got)
 	}
 	if readVaultFile(t, db, "c.md") != cBefore {

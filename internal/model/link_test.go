@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -100,5 +101,20 @@ func TestParseWikilinksDoNotSpanLines(t *testing.T) {
 	}
 	if links[0].Context != "and a real [[Target]] link" {
 		t.Errorf("context = %q", links[0].Context)
+	}
+}
+
+func TestWikilinksInCodeAndImageEmbedsAreNotLinks(t *testing.T) {
+	text := "real [[A]]\n`[[B]]` inline\n```\n[[C]]\n```\n~~~\n[[D]]\n~~~\n![[img.png]] ![[E]] ![[doc.pdf]]"
+	var got []string
+	for _, l := range ParseWikilinks(text) {
+		got = append(got, l.TargetRef)
+	}
+	if strings.Join(got, ",") != "A,E" {
+		t.Errorf("links = %v", got)
+	}
+	out, n := RewriteWikilinks(text, func(target string) (string, bool) { return "X", true })
+	if n != 2 || !strings.Contains(out, "`[[B]]`") || !strings.Contains(out, "\n[[C]]\n") || !strings.Contains(out, "![[img.png]]") {
+		t.Errorf("rewrite touched code or images (%d):\n%s", n, out)
 	}
 }

@@ -28,7 +28,7 @@ type ParsedLink struct {
 var wikilinkRe = regexp.MustCompile(`\[\[([^\]\n]+)\]\]`)
 
 func ParseWikilinks(text string) []ParsedLink {
-	matches := wikilinkRe.FindAllStringSubmatchIndex(text, -1)
+	matches := linkMatches(text)
 	if matches == nil {
 		return nil
 	}
@@ -98,12 +98,77 @@ func ExtractMarkdownLinks(text string) []ParsedLink {
 }
 
 // ReplaceWikilinks replaces each [[target]] or [[target|display]] in text
-// with what replace returns for it. Links never span lines.
+// with what replace returns for it. Links never span lines, and links in
+// code or image embeds are left alone (see linkMatches).
 func ReplaceWikilinks(text string, replace func(target, display string, hasDisplay bool) string) string {
-	return wikilinkRe.ReplaceAllStringFunc(text, func(link string) string {
-		target, display, hasDisplay := strings.Cut(link[2:len(link)-2], "|")
-		return replace(target, display, hasDisplay)
-	})
+	var b strings.Builder
+	last := 0
+	for _, m := range linkMatches(text) {
+		target, display, hasDisplay := strings.Cut(text[m[2]:m[3]], "|")
+		b.WriteString(text[last:m[0]])
+		b.WriteString(replace(target, display, hasDisplay))
+		last = m[1]
+	}
+	b.WriteString(text[last:])
+	return b.String()
+}
+
+var (
+	inlineCodeRe = regexp.MustCompile("`[^`\n]*`")
+	fenceRe      = regexp.MustCompile("^ {0,3}(```|~~~)")
+	fileExtRe    = regexp.MustCompile(`\.([A-Za-z0-9]+)$`)
+)
+
+// linkMatches finds the wikilinks in text that are links, as Obsidian
+// treats them: not inside inline code or a fenced code block, and not an
+// embed of a file other than a note (![[diagram.png]]).
+func linkMatches(text string) [][]int {
+	var code [][2]int
+	offset := 0
+	inFence := false
+	fenceStart := 0
+	for _, line := range strings.SplitAfter(text, "\n") {
+		if fenceRe.MatchString(line) {
+			if inFence {
+				code = append(code, [2]int{fenceStart, offset + len(line)})
+			} else {
+				fenceStart = offset
+			}
+			inFence = !inFence
+		} else if !inFence {
+			for _, m := range inlineCodeRe.FindAllStringIndex(line, -1) {
+				code = append(code, [2]int{offset + m[0], offset + m[1]})
+			}
+		}
+		offset += len(line)
+	}
+	if inFence {
+		code = append(code, [2]int{fenceStart, len(text)})
+	}
+	inCode := func(pos int) bool {
+		for _, r := range code {
+			if pos >= r[0] && pos < r[1] {
+				return true
+			}
+		}
+		return false
+	}
+
+	var out [][]int
+	for _, m := range wikilinkRe.FindAllStringSubmatchIndex(text, -1) {
+		if inCode(m[0]) {
+			continue
+		}
+		if m[0] > 0 && text[m[0]-1] == '!' {
+			target, _, _ := strings.Cut(text[m[2]:m[3]], "|")
+			target, _, _ = strings.Cut(target, "#")
+			if ext := fileExtRe.FindStringSubmatch(strings.TrimSpace(target)); ext != nil && !strings.EqualFold(ext[1], "md") {
+				continue
+			}
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // RewriteWikilinks replaces the target of each [[target]] or
