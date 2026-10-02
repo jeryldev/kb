@@ -916,3 +916,26 @@ func TestFilteredCardsSearchAcrossDescriptionAndTitle(t *testing.T) {
 		t.Fatalf("expected 2 cards matching 'auth' (title c1 + description c2), got %d", len(cards))
 	}
 }
+
+// Filtering changes which cards are shown, not which card is selected:
+// after the filter is applied or cleared, the same card stays selected.
+func TestFilterKeepsTheSelectedCard(t *testing.T) {
+	app := testApp(testColumns(), testCards())
+	app.board.focusCol = 0
+	app.board.focusCard = 1 // Card 2, high priority
+
+	app.updateBoard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}}) // show only high
+	if got := app.selectedCard(); got == nil || got.ID != "c2" {
+		t.Fatalf("after filtering, selected = %v, want c2", got)
+	}
+	app.updateBoard(tea.KeyMsg{Type: tea.KeyEsc})
+	if got := app.selectedCard(); got == nil || got.ID != "c2" {
+		t.Errorf("after clearing the filter, selected = %v, want c2", got)
+	}
+
+	app.board.focusCard = 2 // Card 3, low priority, hidden by the next filter
+	app.updateBoard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	if got := app.selectedCard(); got == nil || got.ID != "c2" {
+		t.Errorf("when the selected card is filtered out, the first match is selected; got %v", got)
+	}
+}
