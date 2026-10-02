@@ -55,7 +55,9 @@ func (p Priority) Prev() Priority {
 }
 
 type Card struct {
-	ID          string
+	ID string
+	// BoardID is the board's vault path; ColumnID is the lane's name.
+	BoardID     string
 	ColumnID    string
 	Title       string
 	Description string
@@ -67,6 +69,9 @@ type Card struct {
 	DeletedAt   *time.Time
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	// Rev identifies the card's text as read; an edit carrying a stale Rev
+	// is refused rather than overwrite a change made since.
+	Rev string
 }
 
 func (c *Card) LabelList() []string {

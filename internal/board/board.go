@@ -661,3 +661,123 @@ func (b *Board) Render() []byte {
 	out = append(out, b.trailer...)
 	return []byte(strings.Join(out, "\n"))
 }
+
+// MoveBefore puts a card in a lane just above another card, or at the end
+// of the lane when beforeID is empty. It is the one move operation: it
+// reads the same whatever else changed in the file since, so it can be
+// applied to a board re-read under a lock.
+func (b *Board) MoveBefore(id, laneTitle, beforeID string) error {
+	to := b.Lane(laneTitle)
+	if to == nil {
+		return fmt.Errorf("no lane %q", laneTitle)
+	}
+	index := len(to.Items())
+	if beforeID != "" {
+		index = -1
+		for i, it := range to.Items() {
+			if it.ID == beforeID {
+				index = i
+			}
+		}
+		if index < 0 {
+			return fmt.Errorf("no card %q in lane %q", beforeID, laneTitle)
+		}
+	}
+	it, from := b.Find(id)
+	if it == nil {
+		return fmt.Errorf("no card %q", id)
+	}
+	if from == to {
+		for i, other := range to.Items() {
+			if other == it && i < index {
+				index-- // removing the card first shifts the target up
+			}
+		}
+	}
+	return b.Move(id, laneTitle, index)
+}
+
+// AddLane appends an empty lane after the others (before the archive).
+func (b *Board) AddLane(name string) error {
+	if err := ValidateLaneName(name); err != nil {
+		return err
+	}
+	if b.Lane(name) != nil {
+		return fmt.Errorf("lane %q already exists", name)
+	}
+	if n := len(b.Lanes); n > 0 {
+		last := b.Lanes[n-1]
+		if k := len(last.elems); k == 0 || last.elems[k-1].item != nil || last.elems[k-1].raw != "" {
+			last.elems = append(last.elems, elem{raw: ""}, elem{raw: ""})
+		}
+	}
+	b.Lanes = append(b.Lanes, &Lane{
+		Title: name, origTitle: name, heading: "## " + name,
+		elems: []elem{{raw: ""}, {raw: ""}, {raw: ""}},
+	})
+	b.changed = true
+	return nil
+}
+
+// RemoveLane deletes a lane that has no cards.
+func (b *Board) RemoveLane(name string) error {
+	for i, l := range b.Lanes {
+		if strings.EqualFold(l.Title, name) {
+			if len(l.Items()) > 0 {
+				return fmt.Errorf("lane %q still has %d cards", l.Title, len(l.Items()))
+			}
+			b.Lanes = append(b.Lanes[:i], b.Lanes[i+1:]...)
+			b.changed = true
+			return nil
+		}
+	}
+	return fmt.Errorf("no lane %q", name)
+}
+
+// RenameLane changes a lane's title, keeping its card limit.
+func (b *Board) RenameLane(from, to string) error {
+	l := b.Lane(from)
+	if l == nil {
+		return fmt.Errorf("no lane %q", from)
+	}
+	if err := ValidateLaneName(to); err != nil {
+		return err
+	}
+	if other := b.Lane(to); other != nil && other != l {
+		return fmt.Errorf("lane %q already exists", to)
+	}
+	l.Title = to
+	b.changed = true
+	return nil
+}
+
+// ReorderLanes puts the lanes in the order of names, which must name every
+// lane exactly once.
+func (b *Board) ReorderLanes(names []string) error {
+	if len(names) != len(b.Lanes) {
+		return fmt.Errorf("name all %d lanes to reorder them, got %d", len(b.Lanes), len(names))
+	}
+	var out []*Lane
+	seen := map[*Lane]bool{}
+	for _, n := range names {
+		l := b.Lane(n)
+		if l == nil {
+			return fmt.Errorf("no lane %q", n)
+		}
+		if seen[l] {
+			return fmt.Errorf("lane %q named twice", n)
+		}
+		seen[l] = true
+		out = append(out, l)
+	}
+	// Each lane keeps its own lines; make sure every lane but the last ends
+	// with blank lines before the next heading.
+	for _, l := range out {
+		if k := len(l.elems); k == 0 || l.elems[k-1].item != nil || l.elems[k-1].raw != "" {
+			l.elems = append(l.elems, elem{raw: ""}, elem{raw: ""})
+		}
+	}
+	b.Lanes = out
+	b.changed = true
+	return nil
+}

@@ -17,7 +17,10 @@ type Note struct {
 	Pinned      bool
 	WorkspaceID string
 	// Path is the note's file, relative to the vault.
-	Path       string
+	Path string
+	// Rev identifies the file content the note was read from; a save that
+	// carries a stale Rev is refused rather than overwrite an outside edit.
+	Rev        string
 	ArchivedAt *time.Time
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
