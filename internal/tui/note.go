@@ -135,8 +135,8 @@ func (a *App) updateNoteListFiltering(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.noteList.filterInput = string(runes[:len(runes)-1])
 		}
 	default:
-		if len(msg.String()) == 1 {
-			a.noteList.filterInput += msg.String()
+		if text, ok := typedText(msg); ok {
+			a.noteList.filterInput += text
 		}
 	}
 	return a, nil

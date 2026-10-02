@@ -267,8 +267,8 @@ func (a *App) updateBoardFiltering(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.board.filterInput = string(runes[:len(runes)-1])
 		}
 	default:
-		if len(msg.String()) == 1 {
-			a.board.filterInput += msg.String()
+		if text, ok := typedText(msg); ok {
+			a.board.filterInput += text
 		}
 	}
 	return a, nil

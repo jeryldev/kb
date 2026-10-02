@@ -344,8 +344,8 @@ func (a *App) updateWSContentCreating(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.wsContent.input = string(runes[:len(runes)-1])
 		}
 	default:
-		if len(msg.String()) == 1 {
-			a.wsContent.input += msg.String()
+		if text, ok := typedText(msg); ok {
+			a.wsContent.input += text
 		}
 	}
 	return a, nil
