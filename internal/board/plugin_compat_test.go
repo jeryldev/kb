@@ -157,3 +157,41 @@ func compareCards(t *testing.T, where string, got, want []*Item) {
 		}
 	}
 }
+
+// Adding a lane, or reordering so another lane is last, on a board with an
+// archive keeps the archive an archive, for kb and for the plugin.
+func TestLaneChangesKeepTheArchive(t *testing.T) {
+	path := harness(t)
+	start := New([]string{"Todo", "Doing", "Done"})
+	it, _ := start.Add("Todo", "old card", "")
+	start.ArchiveItem(it.ID)
+	data := start.Render()
+
+	for name, change := range map[string]func(*Board) error{
+		"add":     func(b *Board) error { return b.AddLane("QA") },
+		"reorder": func(b *Board) error { return b.ReorderLanes([]string{"Done", "Todo", "Doing"}) },
+	} {
+		b, err := Parse(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := change(b); err != nil {
+			t.Fatal(err)
+		}
+		out := b.Render()
+		again, _ := Parse(out)
+		if again.Archive == nil || len(again.Archive.Items()) != 1 || again.Lane("Archive") != nil {
+			t.Errorf("%s: kb reads the archive wrong:\n%s", name, out)
+		}
+		var got struct {
+			Lanes   []struct{ Title string }
+			Archive []json.RawMessage
+		}
+		if err := json.Unmarshal(runHarness(t, path, "json", "en", out), &got); err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Archive) != 1 || len(got.Lanes) != len(again.Lanes) {
+			t.Errorf("%s: the plugin reads %d lanes and %d archived cards:\n%s", name, len(got.Lanes), len(got.Archive), out)
+		}
+	}
+}

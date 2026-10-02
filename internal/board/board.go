@@ -39,6 +39,10 @@ type Board struct {
 	pre        []string // lines between the frontmatter and the first lane
 	trailer    []string // the settings block and anything after it
 	newArchive bool     // Archive was created by kb and needs its heading
+	// archiveSep is the thematic break before the Archive heading, with
+	// the lines between them. It belongs to the archive, not to the lane
+	// read before it, so adding or reordering lanes keeps it in place.
+	archiveSep []string
 	salt       string
 	indent     string // continuation indent the file uses: a tab or 4 spaces
 	changed    bool   // a card was added, moved, archived or deleted
@@ -140,6 +144,7 @@ func ParseSalted(data []byte, salt string) (*Board, error) {
 		}
 	}
 
+	b.takeArchiveSep()
 	b.decodeItems()
 	b.indent = "    "
 	for _, l := range b.allLanes() {
@@ -150,6 +155,30 @@ func ParseSalted(data []byte, salt string) (*Board, error) {
 		}
 	}
 	return b, nil
+}
+
+var thematicBreak = regexp.MustCompile(`^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$`)
+
+// takeArchiveSep moves the thematic break before the Archive heading, and
+// what follows it, out of the last lane's lines.
+func (b *Board) takeArchiveSep() {
+	if b.Archive == nil || len(b.Lanes) == 0 {
+		return
+	}
+	last := b.Lanes[len(b.Lanes)-1]
+	for i := len(last.elems) - 1; i >= 0; i-- {
+		e := last.elems[i]
+		if e.item != nil {
+			return
+		}
+		if thematicBreak.MatchString(strings.TrimRight(e.raw, "\r")) {
+			for _, rest := range last.elems[i:] {
+				b.archiveSep = append(b.archiveSep, rest.raw)
+			}
+			last.elems = last.elems[:i]
+			return
+		}
+	}
 }
 
 type laneSpan struct {
@@ -642,6 +671,7 @@ func (b *Board) Render() []byte {
 		out = append(out, l.render(b.indent)...)
 	}
 	if b.Archive != nil {
+		out = append(out, b.archiveSep...)
 		if b.newArchive {
 			if n := len(out); n > 0 && out[n-1] != "" {
 				out = append(out, "")
