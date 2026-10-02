@@ -1,0 +1,27 @@
+{
+  "frontmatter": {
+    "kanban-plugin": "board",
+    "workspace": "School",
+    "description": "sprint board"
+  },
+  "settings": {
+    "kanban-plugin": "board",
+    "lane-width": 300
+  },
+  "lanes": [
+    {
+      "title": "Todo",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "a card",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": []
+        }
+      ]
+    }
+  ],
+  "archive": []
+}

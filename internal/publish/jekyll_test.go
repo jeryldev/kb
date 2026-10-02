@@ -5,8 +5,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jeryldev/kb/internal/model"
+	"gopkg.in/yaml.v3"
 )
 
 type mockResolver struct {
@@ -308,5 +310,48 @@ func TestPermalinkFromPostPath(t *testing.T) {
 	}
 	if _, ok := PermalinkFromPostPath("_posts/not-a-post.md"); ok {
 		t.Error("a path without a date should not give a permalink")
+	}
+}
+
+// Front matter must be YAML a site can read, whatever a title or tag holds.
+func TestFrontMatterIsValidYAMLForAwkwardTitlesAndTags(t *testing.T) {
+	note := &model.Note{Title: `Say "hi" \ to: you`, Tags: "go,*star,!bang,c++,a: b", Body: strings.Repeat("é", 300)}
+	fm := GenerateFrontMatter(note, time.Date(2026, 5, 13, 0, 0, 0, 0, time.UTC), false)
+	var parsed struct {
+		Title   string   `yaml:"title"`
+		Tags    []string `yaml:"tags"`
+		Excerpt string   `yaml:"excerpt"`
+	}
+	body := strings.TrimSuffix(strings.TrimPrefix(fm, "---\n"), "---\n")
+	if err := yaml.Unmarshal([]byte(body), &parsed); err != nil {
+		t.Fatalf("front matter is not YAML: %v\n%s", err, fm)
+	}
+	if parsed.Title != note.Title {
+		t.Errorf("title = %q", parsed.Title)
+	}
+	if strings.Join(parsed.Tags, "|") != "go|*star|!bang|c++|a: b" {
+		t.Errorf("tags = %q", parsed.Tags)
+	}
+	if !utf8.ValidString(parsed.Excerpt) || !strings.HasSuffix(parsed.Excerpt, "...") || utf8.RuneCountInString(parsed.Excerpt) != 203 {
+		t.Errorf("excerpt = %q", parsed.Excerpt)
+	}
+	if !strings.Contains(fm, "tags: [go, ") {
+		t.Errorf("plain tags stay plain:\n%s", fm)
+	}
+}
+
+func TestPermalinkPatterns(t *testing.T) {
+	path := "_posts/2026-05-13-dual-transformation.md"
+	for pattern, want := range map[string]string{
+		"":                                 "/blog/2026/05/13/dual-transformation/",
+		"/:year/:month/:day/:title/":       "/2026/05/13/dual-transformation/",
+		"/posts/:title":                    "/posts/dual-transformation",
+		"/:year/:title.html":               "/2026/dual-transformation.html",
+		"/notes/:year-:month-:day-:title/": "/notes/2026-05-13-dual-transformation/",
+	} {
+		got, ok := PermalinkFor(pattern, path)
+		if !ok || got != want {
+			t.Errorf("pattern %q: %q, want %q", pattern, got, want)
+		}
 	}
 }

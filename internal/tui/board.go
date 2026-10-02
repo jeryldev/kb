@@ -6,239 +6,222 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/jeryldev/kb/internal/fstore"
 	"github.com/jeryldev/kb/internal/model"
 )
 
 type boardModel struct {
-	board       *model.Board
-	columns     []*model.Column
-	cards       map[string][]*model.Card
-	focusCol    int
-	focusCard   int
-	scrollCol   int
+	board *model.Board
+	lanes []fstore.Lane
+	// cards are each lane's cards, by lane name.
+	cards     map[string][]*model.Card
+	focusCol  int
+	focusCard int
+	scrollCol int
+
+	// filter matches a card's title, description or labels; priority is
+	// an exact priority. A card is shown when it matches both.
 	filter      string
+	priority    model.Priority
 	filterInput string
 	filtering   bool
-	confirming   string
+
+	confirming   string // "archive", "delete" or "move"
 	moving       bool
 	moveOrigCol  int
 	moveOrigCard int
 	moveCard     *model.Card
 	showHelp     bool
-	err          error
-	feedback     string
 }
 
-type boardLoadedMsg struct {
-	columns []*model.Column
-	cards   map[string][]*model.Card
-}
-
-type cardMovedMsg struct{}
-type cardArchivedMsg struct{}
-type cardDeletedMsg struct{}
-
-func (a *App) loadBoard() tea.Cmd {
-	return func() tea.Msg {
-		columns, err := a.db.ListColumns(a.board.board.ID)
-		if err != nil {
-			return errMsg{err}
-		}
-
-		cards := make(map[string][]*model.Card)
-		for _, col := range columns {
-			colCards, err := a.db.ListCards(col.ID)
-			if err != nil {
-				return errMsg{err}
-			}
-			cards[col.ID] = colCards
-		}
-
-		return boardLoadedMsg{columns: columns, cards: cards}
+// loadBoard reads the board as it is on disk now.
+func (a *App) loadBoard() {
+	if !a.reload() {
+		return
 	}
+	board, err := a.db.GetBoard(a.board.board.ID)
+	if a.fail(err) {
+		return
+	}
+	lanes, err := a.db.Lanes(board.ID)
+	if a.fail(err) {
+		return
+	}
+	cards := map[string][]*model.Card{}
+	for _, l := range lanes {
+		list, err := a.db.Cards(board.ID, l.Name)
+		if a.fail(err) {
+			return
+		}
+		cards[l.Name] = list
+	}
+	a.board.board, a.board.lanes, a.board.cards = board, lanes, cards
+	a.board.focusCol = max(0, min(a.board.focusCol, len(lanes)-1))
+	a.clampCardSelection()
+	a.adjustScroll()
 }
 
 func (a *App) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case boardLoadedMsg:
-		a.board.columns = msg.columns
-		a.board.cards = msg.cards
-		a.board.err = nil
-		a.clampCardSelection()
-		a.adjustScroll()
-
-	case cardMovedMsg:
-		a.board.feedback = "Card moved"
-		return a, a.loadBoard()
-	case cardArchivedMsg:
-		a.board.feedback = "Card archived"
-		return a, a.loadBoard()
-	case cardDeletedMsg:
-		a.board.feedback = "Card deleted"
-		return a, a.loadBoard()
-
-	case errMsg:
-		a.board.err = msg.err
-
-	case tea.KeyMsg:
-		a.board.feedback = ""
-
-		if a.board.filtering {
-			return a.updateBoardFiltering(msg)
-		}
-
-		if a.board.confirming != "" {
-			return a.updateBoardConfirming(msg)
-		}
-
-		if a.board.moving {
-			return a.updateBoardMoving(msg)
-		}
-
-		if a.board.showHelp {
-			a.board.showHelp = false
-			return a, nil
-		}
-
-		switch msg.String() {
-		case "j", "down":
-			a.moveSelectionDown()
-		case "k", "up":
-			a.moveSelectionUp()
-		case "h", "left":
-			a.focusColumnLeft()
-		case "l", "right":
-			a.focusColumnRight()
-		case "H":
-			a.startMoveMode(-1, 0)
-		case "L":
-			a.startMoveMode(1, 0)
-		case "J":
-			a.startMoveMode(0, 1)
-		case "K":
-			a.startMoveMode(0, -1)
-		case "n":
-			return a, a.newCardInCurrentColumn()
-		case "enter":
-			return a, a.viewSelectedCard()
-		case "e":
-			return a, a.editSelectedCard()
-		case "d":
-			if a.selectedCard() != nil {
-				a.board.confirming = "archive"
-			}
-		case "D":
-			if a.selectedCard() != nil {
-				a.board.confirming = "delete"
-			}
-		case "esc":
-			if a.board.filter != "" {
-				a.setFilter("")
-			}
-		case "/":
-			a.board.filtering = true
-			a.board.filterInput = ""
-		case "1":
-			a.togglePriorityFilter("urgent")
-		case "2":
-			a.togglePriorityFilter("high")
-		case "3":
-			a.togglePriorityFilter("medium")
-		case "4":
-			a.togglePriorityFilter("low")
-		case "b":
-			if a.wsContent.workspace != nil {
-				return a, a.switchToWSContent(a.wsContent.workspace)
-			}
-			a.mode = modePicker
-			return a, a.initPicker()
-		case "?":
-			a.board.showHelp = !a.board.showHelp
-		case "q":
-			return a, tea.Quit
-		}
+	key, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return a, nil
+	}
+	b := &a.board
+	switch {
+	case b.filtering:
+		return a.updateBoardFiltering(key)
+	case b.confirming != "":
+		return a.updateBoardConfirming(key)
+	case b.moving:
+		return a.updateBoardMoving(key)
+	case b.showHelp:
+		b.showHelp = false
+		return a, nil
 	}
 
+	switch key.String() {
+	case "j", "down":
+		if b.focusCard < len(a.focusedCards())-1 {
+			b.focusCard++
+		}
+	case "k", "up":
+		if b.focusCard > 0 {
+			b.focusCard--
+		}
+	case "h", "left":
+		a.focusColumn(b.focusCol - 1)
+	case "l", "right":
+		a.focusColumn(b.focusCol + 1)
+	case "H":
+		a.startMoveMode(-1, 0)
+	case "L":
+		a.startMoveMode(1, 0)
+	case "J":
+		a.startMoveMode(0, 1)
+	case "K":
+		a.startMoveMode(0, -1)
+	case "n":
+		return a, a.newCardInCurrentColumn()
+	case "enter":
+		a.viewSelectedCard()
+	case "e":
+		return a, a.editSelectedCard(modeBoard)
+	case "d":
+		if a.selectedCard() != nil {
+			b.confirming = "archive"
+		}
+	case "D":
+		if a.selectedCard() != nil {
+			b.confirming = "delete"
+		}
+	case "esc":
+		a.setFilter("", "")
+	case "/":
+		b.filtering = true
+		b.filterInput = b.filter
+	case "1":
+		a.togglePriorityFilter(model.PriorityUrgent)
+	case "2":
+		a.togglePriorityFilter(model.PriorityHigh)
+	case "3":
+		a.togglePriorityFilter(model.PriorityMedium)
+	case "4":
+		a.togglePriorityFilter(model.PriorityLow)
+	case "b":
+		a.backToWorkspace()
+	case "?":
+		b.showHelp = true
+	case "q":
+		return a, tea.Quit
+	}
 	return a, nil
 }
 
-func (a *App) startMoveMode(colDir, cardDir int) {
-	card := a.selectedCard()
-	if card == nil || len(a.board.columns) == 0 {
-		return
+func (a *App) focusedLane() (fstore.Lane, bool) {
+	if a.board.focusCol < 0 || a.board.focusCol >= len(a.board.lanes) {
+		return fstore.Lane{}, false
 	}
-
-	targetCol := a.board.focusCol + colDir
-	if targetCol < 0 || targetCol >= len(a.board.columns) {
-		return
-	}
-
-	a.board.moving = true
-	a.board.moveOrigCol = a.board.focusCol
-	a.board.moveOrigCard = a.board.focusCard
-	a.board.moveCard = card
-
-	if colDir != 0 {
-		a.board.focusCol = targetCol
-		col := a.board.columns[a.board.focusCol]
-		cards := a.cardsForDisplay(col.ID)
-		if a.board.focusCard > len(cards) {
-			a.board.focusCard = len(cards)
-		}
-		a.adjustScroll()
-	}
-
-	if cardDir != 0 {
-		col := a.board.columns[a.board.focusCol]
-		cards := a.cardsForDisplay(col.ID)
-		target := a.board.focusCard + cardDir
-		if target < 0 || target >= len(cards) {
-			a.board.moving = false
-			a.board.moveCard = nil
-			return
-		}
-		a.board.focusCard = target
-	}
+	return a.board.lanes[a.board.focusCol], true
 }
 
-func (a *App) updateBoardMoving(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
+// focusedCards are the cards shown in the focused column.
+func (a *App) focusedCards() []*model.Card {
+	lane, ok := a.focusedLane()
+	if !ok {
+		return nil
+	}
+	return a.cardsForDisplay(lane.Name)
+}
+
+func (a *App) focusColumn(col int) {
+	if col < 0 || col >= len(a.board.lanes) {
+		return
+	}
+	a.board.focusCol = col
+	a.clampCardSelection()
+	a.adjustScroll()
+}
+
+func (a *App) startMoveMode(colDir, cardDir int) {
+	b := &a.board
+	card := a.selectedCard()
+	if card == nil {
+		return
+	}
+	targetCol := b.focusCol + colDir
+	if targetCol < 0 || targetCol >= len(b.lanes) {
+		return
+	}
+	if cardDir != 0 {
+		target := b.focusCard + cardDir
+		if target < 0 || target >= len(a.focusedCards()) {
+			return
+		}
+	}
+	b.moving = true
+	b.moveOrigCol = b.focusCol
+	b.moveOrigCard = b.focusCard
+	b.moveCard = card
+	if colDir != 0 {
+		a.moveFocusColumn(targetCol)
+	}
+	b.focusCard += cardDir
+}
+
+// moveFocusColumn moves the card being moved to another column, keeping
+// its position as far as that column allows.
+func (a *App) moveFocusColumn(col int) {
+	if col < 0 || col >= len(a.board.lanes) {
+		return
+	}
+	a.board.focusCol = col
+	// While moving, the card is shown in the focused column, so it can go
+	// one past the column's other cards.
+	a.board.focusCard = min(a.board.focusCard, len(a.focusedCards())-1)
+	a.adjustScroll()
+}
+
+func (a *App) updateBoardMoving(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	b := &a.board
+	switch key.String() {
 	case "h", "H", "left":
-		if a.board.focusCol > 0 {
-			a.board.focusCol--
-			col := a.board.columns[a.board.focusCol]
-			cards := a.cardsForDisplay(col.ID)
-			if a.board.focusCard > len(cards) {
-				a.board.focusCard = len(cards)
-			}
-			a.adjustScroll()
-		}
+		a.moveFocusColumn(b.focusCol - 1)
 	case "l", "L", "right":
-		if a.board.focusCol < len(a.board.columns)-1 {
-			a.board.focusCol++
-			col := a.board.columns[a.board.focusCol]
-			cards := a.cardsForDisplay(col.ID)
-			if a.board.focusCard > len(cards) {
-				a.board.focusCard = len(cards)
-			}
-			a.adjustScroll()
-		}
+		a.moveFocusColumn(b.focusCol + 1)
 	case "j", "J", "down":
-		col := a.board.columns[a.board.focusCol]
-		cards := a.cardsForDisplay(col.ID)
-		if a.board.focusCard < len(cards)-1 {
-			a.board.focusCard++
+		if b.focusCard < len(a.focusedCards())-1 {
+			b.focusCard++
 		}
 	case "k", "K", "up":
-		if a.board.focusCard > 0 {
-			a.board.focusCard--
+		if b.focusCard > 0 {
+			b.focusCard--
 		}
 	case "enter":
-		if a.board.focusCol == a.board.moveOrigCol && a.board.focusCard == a.board.moveOrigCard {
+		if b.focusCol == b.moveOrigCol && b.focusCard == b.moveOrigCard {
 			a.cancelMoving()
 			return a, nil
 		}
-		a.board.confirming = "move"
+		b.confirming = "move"
 	case "esc":
 		a.cancelMoving()
 	}
@@ -246,216 +229,156 @@ func (a *App) updateBoardMoving(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (a *App) cancelMoving() {
-	a.board.focusCol = a.board.moveOrigCol
-	a.board.focusCard = a.board.moveOrigCard
-	a.board.moving = false
-	a.board.moveCard = nil
+	b := &a.board
+	b.focusCol, b.focusCard = b.moveOrigCol, b.moveOrigCard
+	b.moving, b.moveCard = false, nil
 	a.adjustScroll()
 }
 
-func (a *App) updateBoardFiltering(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
+func (a *App) updateBoardFiltering(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	b := &a.board
+	switch key.String() {
 	case "enter":
-		a.board.filtering = false
-		a.setFilter(strings.TrimSpace(a.board.filterInput))
+		b.filtering = false
+		a.setFilter(strings.TrimSpace(b.filterInput), b.priority)
 	case "esc":
-		a.board.filtering = false
-		a.setFilter("")
+		// Esc stops typing; the filter already applied stays.
+		b.filtering = false
 	case "backspace":
-		if len(a.board.filterInput) > 0 {
-			runes := []rune(a.board.filterInput)
-			a.board.filterInput = string(runes[:len(runes)-1])
+		if runes := []rune(b.filterInput); len(runes) > 0 {
+			b.filterInput = string(runes[:len(runes)-1])
 		}
 	default:
-		if text, ok := typedText(msg); ok {
-			a.board.filterInput += text
+		if text, ok := typedText(key); ok {
+			b.filterInput += text
 		}
 	}
 	return a, nil
 }
 
-func (a *App) updateBoardConfirming(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "y", "Y":
-		action := a.board.confirming
-		a.board.confirming = ""
-		switch action {
-		case "archive":
-			card := a.selectedCard()
-			if card == nil {
-				return a, nil
-			}
-			return a, func() tea.Msg {
-				if err := a.db.ArchiveCard(card.ID); err != nil {
-					return errMsg{err}
-				}
-				return cardArchivedMsg{}
-			}
-		case "delete":
-			card := a.selectedCard()
-			if card == nil {
-				return a, nil
-			}
-			return a, func() tea.Msg {
-				if err := a.db.DeleteCard(card.ID); err != nil {
-					return errMsg{err}
-				}
-				return cardDeletedMsg{}
-			}
-		case "move":
-			return a, a.commitCardMove()
-		}
-	default:
-		a.board.confirming = ""
-		if a.board.moving {
+func (a *App) updateBoardConfirming(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	b := &a.board
+	action := b.confirming
+	b.confirming = ""
+	if !isYes(key) {
+		if b.moving {
 			a.cancelMoving()
 		}
+		return a, nil
+	}
+	switch action {
+	case "archive", "delete":
+		card := a.selectedCard()
+		if card == nil {
+			return a, nil
+		}
+		a.archiveOrDelete(action, card)
+		a.loadBoard()
+	case "move":
+		a.commitCardMove()
 	}
 	return a, nil
 }
 
-func (a *App) filteredCards(columnID string) []*model.Card {
-	cards := a.board.cards[columnID]
-	if a.board.filter == "" {
+func (a *App) archiveOrDelete(action string, card *model.Card) bool {
+	if action == "archive" {
+		if a.fail(a.db.ArchiveCard(card.BoardID, card.ID)) {
+			return false
+		}
+		a.feedback = fmt.Sprintf("Archived %q", truncate(card.Title, 40))
+		return true
+	}
+	if a.fail(a.db.DeleteCard(card.BoardID, card.ID)) {
+		return false
+	}
+	a.feedback = fmt.Sprintf("Deleted %q", truncate(card.Title, 40))
+	return true
+}
+
+func (a *App) cardMatches(c *model.Card) bool {
+	b := &a.board
+	if b.priority != "" && c.Priority != b.priority {
+		return false
+	}
+	if b.filter == "" {
+		return true
+	}
+	f := strings.ToLower(b.filter)
+	return strings.Contains(strings.ToLower(c.Title), f) ||
+		strings.Contains(strings.ToLower(c.Description), f) ||
+		c.HasLabel(strings.TrimPrefix(b.filter, "#"))
+}
+
+func (a *App) filtering() bool { return a.board.filter != "" || a.board.priority != "" }
+
+func (a *App) filteredCards(lane string) []*model.Card {
+	cards := a.board.cards[lane]
+	if !a.filtering() {
 		return cards
 	}
-
-	filter := strings.ToLower(a.board.filter)
-	var result []*model.Card
-	for _, card := range cards {
-		if strings.Contains(strings.ToLower(card.Title), filter) ||
-			strings.Contains(strings.ToLower(card.Description), filter) ||
-			strings.Contains(strings.ToLower(string(card.Priority)), filter) ||
-			card.HasLabel(a.board.filter) {
-			result = append(result, card)
+	var out []*model.Card
+	for _, c := range cards {
+		if a.cardMatches(c) {
+			out = append(out, c)
 		}
 	}
-	return result
+	return out
 }
 
 func (a *App) totalFilteredCardCount() int {
-	filter := strings.ToLower(a.board.filter)
-	count := 0
-	for _, cards := range a.board.cards {
-		for _, card := range cards {
-			if strings.Contains(strings.ToLower(card.Title), filter) ||
-				strings.Contains(strings.ToLower(card.Description), filter) ||
-				strings.Contains(strings.ToLower(string(card.Priority)), filter) ||
-				card.HasLabel(a.board.filter) {
-				count++
-			}
-		}
+	n := 0
+	for _, l := range a.board.lanes {
+		n += len(a.filteredCards(l.Name))
 	}
-	return count
+	return n
 }
 
-func (a *App) cardsForDisplay(columnID string) []*model.Card {
-	cards := a.filteredCards(columnID)
-
-	if !a.board.moving || a.board.moveCard == nil {
+// cardsForDisplay are a column's shown cards; while a card is being moved,
+// it is shown at its new place in the focused column instead of its old.
+func (a *App) cardsForDisplay(lane string) []*model.Card {
+	b := &a.board
+	cards := a.filteredCards(lane)
+	if !b.moving || b.moveCard == nil {
 		return cards
 	}
-
-	origCol := a.board.columns[a.board.moveOrigCol]
-	targetCol := a.board.columns[a.board.focusCol]
-
-	if columnID != origCol.ID && columnID != targetCol.ID {
-		return cards
-	}
-
-	// Remove the moving card from the origin column's list
 	without := make([]*model.Card, 0, len(cards))
 	for _, c := range cards {
-		if c.ID != a.board.moveCard.ID {
+		if c.ID != b.moveCard.ID {
 			without = append(without, c)
 		}
 	}
-
-	if columnID == origCol.ID && columnID != targetCol.ID {
+	if lane != b.lanes[b.focusCol].Name {
 		return without
 	}
-
-	idx := a.board.focusCard
-	if idx > len(without) {
-		idx = len(without)
-	}
-	result := make([]*model.Card, 0, len(without)+1)
-	result = append(result, without[:idx]...)
-	result = append(result, a.board.moveCard)
-	result = append(result, without[idx:]...)
-	return result
+	idx := max(0, min(b.focusCard, len(without)))
+	out := make([]*model.Card, 0, len(without)+1)
+	out = append(out, without[:idx]...)
+	out = append(out, b.moveCard)
+	return append(out, without[idx:]...)
 }
 
 func (a *App) selectedCard() *model.Card {
 	if a.board.moving && a.board.moveCard != nil {
 		return a.board.moveCard
 	}
-	if len(a.board.columns) == 0 {
-		return nil
-	}
-	col := a.board.columns[a.board.focusCol]
-	cards := a.filteredCards(col.ID)
-	if a.board.focusCard >= len(cards) || a.board.focusCard < 0 {
+	cards := a.focusedCards()
+	if a.board.focusCard < 0 || a.board.focusCard >= len(cards) {
 		return nil
 	}
 	return cards[a.board.focusCard]
 }
 
-func (a *App) moveSelectionDown() {
-	if len(a.board.columns) == 0 {
-		return
-	}
-	col := a.board.columns[a.board.focusCol]
-	cards := a.filteredCards(col.ID)
-	if a.board.focusCard < len(cards)-1 {
-		a.board.focusCard++
-	}
-}
-
-func (a *App) moveSelectionUp() {
-	if a.board.focusCard > 0 {
-		a.board.focusCard--
-	}
-}
-
-func (a *App) focusColumnLeft() {
-	if a.board.focusCol > 0 {
-		a.board.focusCol--
-		a.clampCardSelection()
-		a.adjustScroll()
-	}
-}
-
-func (a *App) focusColumnRight() {
-	if a.board.focusCol < len(a.board.columns)-1 {
-		a.board.focusCol++
-		a.clampCardSelection()
-		a.adjustScroll()
-	}
-}
-
 func (a *App) clampCardSelection() {
-	if len(a.board.columns) == 0 {
-		return
-	}
-	col := a.board.columns[a.board.focusCol]
-	cards := a.filteredCards(col.ID)
-	if a.board.focusCard >= len(cards) {
-		a.board.focusCard = max(0, len(cards)-1)
-	}
+	a.board.focusCard = max(0, min(a.board.focusCard, len(a.focusedCards())-1))
 }
 
 func (a *App) visibleColumnCount() int {
-	numCols := len(a.board.columns)
-	if numCols == 0 {
+	n := len(a.board.lanes)
+	if n == 0 {
 		return 0
 	}
-	w := a.width
-	if w == 0 {
-		w = 80
-	}
-	visible := w / 24
-	return max(1, min(visible, numCols))
+	w, _ := a.size()
+	return max(1, min(w/24, n))
 }
 
 func (a *App) adjustScroll() {
@@ -463,99 +386,107 @@ func (a *App) adjustScroll() {
 	if visible == 0 {
 		return
 	}
-	maxScroll := len(a.board.columns) - visible
-	a.board.scrollCol = max(0, min(a.board.scrollCol, maxScroll))
-
-	if a.board.focusCol < a.board.scrollCol {
-		a.board.scrollCol = a.board.focusCol
+	b := &a.board
+	b.scrollCol = max(0, min(b.scrollCol, len(b.lanes)-visible))
+	if b.focusCol < b.scrollCol {
+		b.scrollCol = b.focusCol
 	}
-	if a.board.focusCol >= a.board.scrollCol+visible {
-		a.board.scrollCol = a.board.focusCol - visible + 1
+	if b.focusCol >= b.scrollCol+visible {
+		b.scrollCol = b.focusCol - visible + 1
 	}
 }
 
-func (a *App) commitCardMove() tea.Cmd {
-	card := a.board.moveCard
-	targetColIdx := a.board.focusCol
-	origColIdx := a.board.moveOrigCol
-
-	if card == nil || len(a.board.columns) == 0 {
-		a.board.moving = false
-		a.board.moveCard = nil
-		return nil
-	}
-
-	targetCol := a.board.columns[targetColIdx]
-	sameColumn := targetColIdx == origColIdx
-
-	if !sameColumn && targetCol.WIPLimit != nil {
-		count, err := a.db.CountCardsInColumn(targetCol.ID)
-		if err != nil {
-			a.board.err = fmt.Errorf("checking WIP limit: %w", err)
-			a.cancelMoving()
-			return nil
-		}
-		if count >= *targetCol.WIPLimit {
-			a.board.err = fmt.Errorf("column %s is at WIP limit", targetCol.Name)
-			a.cancelMoving()
-			return nil
+// moveTarget is where the moved card goes, as the card it goes above (""
+// for the end of the column). Only the shown cards were in view, so the
+// card goes right above the shown card after it or, when it was put
+// last, right below the shown card before it; cards the filter hides keep
+// their places around it.
+func (a *App) moveTarget() string {
+	b := &a.board
+	lane := b.lanes[b.focusCol].Name
+	shown := a.cardsForDisplay(lane)
+	idx := -1
+	for i, c := range shown {
+		if c.ID == b.moveCard.ID {
+			idx = i
 		}
 	}
-
-	displayCards := a.cardsForDisplay(targetCol.ID)
-	cardIDs := make([]string, len(displayCards))
-	for i, c := range displayCards {
-		cardIDs[i] = c.ID
+	if idx+1 < len(shown) {
+		return shown[idx+1].ID
 	}
-
-	a.board.moving = false
-	a.board.moveCard = nil
-
-	return func() tea.Msg {
-		if !sameColumn {
-			if err := a.db.MoveCard(card.ID, targetCol.ID); err != nil {
-				return errMsg{err}
+	if idx <= 0 {
+		return ""
+	}
+	prev := shown[idx-1].ID
+	all := b.cards[lane]
+	for i, c := range all {
+		if c.ID == prev {
+			for _, next := range all[i+1:] {
+				if next.ID != b.moveCard.ID {
+					return next.ID
+				}
 			}
 		}
-		if err := a.db.ReorderCardsInColumn(targetCol.ID, cardIDs); err != nil {
-			return errMsg{err}
-		}
-		return cardMovedMsg{}
 	}
+	return ""
+}
+
+func (a *App) commitCardMove() {
+	b := &a.board
+	card := b.moveCard
+	if card == nil || len(b.lanes) == 0 {
+		b.moving, b.moveCard = false, nil
+		return
+	}
+	lane := b.lanes[b.focusCol].Name
+	before := a.moveTarget()
+	err := a.db.MoveCard(b.board.ID, card.ID, lane, before, false)
+	if err != nil {
+		a.cancelMoving()
+		a.err = err
+		a.loadBoard()
+		return
+	}
+	b.moving, b.moveCard = false, nil
+	a.loadBoard()
+	// Keep the moved card selected.
+	for i, c := range a.focusedCards() {
+		if c.ID == card.ID {
+			b.focusCard = i
+		}
+	}
+	a.feedback = fmt.Sprintf("Moved %q to %s", truncate(card.Title, 30), lane)
 }
 
 func (a *App) newCardInCurrentColumn() tea.Cmd {
-	if len(a.board.columns) == 0 {
+	lane, ok := a.focusedLane()
+	if !ok {
 		return nil
 	}
-	col := a.board.columns[a.board.focusCol]
 	a.mode = modeCardEdit
-	a.card = newCardModel(nil, col.ID, a.board.columns, a.width)
+	a.card = newCardModel(nil, a.board.board.ID, lane.Name, a.width, modeBoard)
 	return a.card.Init()
 }
 
-func (a *App) viewSelectedCard() tea.Cmd {
+func (a *App) viewSelectedCard() {
 	card := a.selectedCard()
 	if card == nil {
-		return nil
+		return
 	}
-	col := a.board.columns[a.board.focusCol]
-	a.cardView = cardViewModel{
-		card:      card,
-		colName:   col.Name,
-		formWidth: a.cardFormWidth(),
-	}
+	a.cardView = cardViewModel{card: card}
 	a.mode = modeCardView
-	return nil
 }
 
-func (a *App) editSelectedCard() tea.Cmd {
+func (a *App) editSelectedCard(returnTo mode) tea.Cmd {
 	card := a.selectedCard()
+	if returnTo == modeCardView {
+		card = a.cardView.card
+	}
 	if card == nil {
 		return nil
 	}
 	a.mode = modeCardEdit
-	a.card = newCardModel(card, card.ColumnID, a.board.columns, a.width)
+	a.card = newCardModel(card, card.BoardID, card.ColumnID, a.width, returnTo)
 	return a.card.Init()
 }
 
@@ -563,327 +494,253 @@ func (a *App) cardFormWidth() int {
 	return max(50, min(a.width*80/100, 100))
 }
 
-func (a *App) togglePriorityFilter(priority string) {
-	if a.board.filter == priority {
-		a.setFilter("")
-	} else {
-		a.setFilter(priority)
+func (a *App) togglePriorityFilter(p model.Priority) {
+	if a.board.priority == p {
+		p = ""
 	}
+	a.setFilter(a.board.filter, p)
 }
 
 // setFilter changes which cards are shown while keeping the same card
 // selected; if the filter hides it, the column's first match is selected.
-func (a *App) setFilter(filter string) {
+func (a *App) setFilter(filter string, priority model.Priority) {
 	selected := a.selectedCard()
-	a.board.filter = filter
+	a.board.filter, a.board.priority = filter, priority
 	a.board.focusCard = 0
-	if selected != nil && a.board.focusCol < len(a.board.columns) {
-		for i, card := range a.filteredCards(a.board.columns[a.board.focusCol].ID) {
-			if card.ID == selected.ID {
+	if selected != nil {
+		for i, c := range a.focusedCards() {
+			if c.ID == selected.ID {
 				a.board.focusCard = i
-				break
 			}
 		}
 	}
 	a.clampCardSelection()
 }
 
+func (a *App) boardTitle() string {
+	label := a.board.board.Name
+	if a.wsContent.workspace != nil {
+		label = a.wsContent.workspace.Name + " > " + label
+	}
+	total, done := 0, 0
+	for _, cards := range a.board.cards {
+		total += len(cards)
+	}
+	if n := len(a.board.lanes); n > 0 {
+		done = len(a.board.cards[a.board.lanes[n-1].Name])
+	}
+	if total == 0 {
+		return fmt.Sprintf(" kb: %s ", label)
+	}
+	return fmt.Sprintf(" kb: %s  %s %d/%d ", label, progressBar(done, total, 10), done, total)
+}
+
 func (a *App) viewBoard() string {
 	if a.board.showHelp {
 		return a.viewBoardHelp()
 	}
-
-	w := a.width
-	if w == 0 {
-		w = 80
+	b := &a.board
+	hints := " hjkl: navigate   HJKL: move   n: new   Enter: view   e: edit   d: archive   /: filter   b: back   ?: help   q: quit"
+	if b.moving && b.confirming == "" {
+		hints = fmt.Sprintf(" Moving %q — h/l: column  j/k: position  Enter: confirm  Esc: cancel", truncate(b.moveCard.Title, 25))
 	}
-	h := a.height
-	if h == 0 {
-		h = 24
+	w, _ := a.size()
+	var extra []string
+	if bar := a.scrollIndicator(w); bar != "" {
+		extra = append(extra, bar)
 	}
-
-	totalCards := 0
-	for _, cards := range a.board.cards {
-		totalCards += len(cards)
-	}
-	doneCards := 0
-	if len(a.board.columns) > 0 {
-		lastCol := a.board.columns[len(a.board.columns)-1]
-		doneCards = len(a.board.cards[lastCol.ID])
-	}
-
-	boardLabel := a.board.board.Name
-	if a.wsContent.workspace != nil {
-		boardLabel = a.wsContent.workspace.Name + " > " + a.board.board.Name
-	}
-	titleText := fmt.Sprintf(" kb: %s ", boardLabel)
-	if totalCards > 0 {
-		bar := progressBar(doneCards, totalCards, 10)
-		titleText = fmt.Sprintf(" kb: %s  %s %d/%d ",
-			boardLabel, bar, doneCards, totalCards)
-	}
-	titleBar := titleBarStyle.Width(w).Render(titleText)
-
-	statusText := " hjkl: navigate   HJKL: move/reorder   n: new   Enter: view   e: edit   d: archive   b: back   ?: help   q: quit"
-	if a.board.moving && a.board.confirming == "" {
-		statusText = fmt.Sprintf(" Moving %q — h/l: column  j/k: position  Enter: confirm  Esc: cancel",
-			truncate(a.board.moveCard.Title, 25))
-	}
-	statusBar := statusBarStyle.Width(w).Render(statusText)
-
-	filterBar := ""
-	if a.board.filtering {
-		filterBar = filterBarStyle.Render(fmt.Sprintf(" / %s", a.board.filterInput)) + "█"
-	} else if a.board.filter != "" {
-		filteredCount := a.totalFilteredCardCount()
-		filterBar = filterBarStyle.Render(fmt.Sprintf(" filter: %s (%d cards)", a.board.filter, filteredCount)) +
-			helpStyle.Render("  (/ to change, esc clears)")
-	}
-
-	errBar := ""
-	if a.board.err != nil {
-		errBar = errorStyle.Render(fmt.Sprintf(" Error: %s", a.board.err))
-	} else if a.board.feedback != "" {
-		errBar = helpStyle.Render(fmt.Sprintf(" %s", a.board.feedback))
-	}
-
-	scrollBar := ""
-	numCols := len(a.board.columns)
-	visibleCols := a.visibleColumnCount()
-	if numCols > 0 && visibleCols < numCols {
-		var leftIndicator, rightIndicator string
-		if a.board.scrollCol > 0 {
-			leftIndicator = fmt.Sprintf("< %d more", a.board.scrollCol)
+	if b.filtering {
+		extra = append(extra, filterBarStyle.Render(" / "+b.filterInput)+"█")
+	} else if a.filtering() {
+		var parts []string
+		if b.filter != "" {
+			parts = append(parts, fmt.Sprintf("%q", b.filter))
 		}
-		if hiddenRight := numCols - a.board.scrollCol - visibleCols; hiddenRight > 0 {
-			rightIndicator = fmt.Sprintf("%d more >", hiddenRight)
+		if b.priority != "" {
+			parts = append(parts, "priority "+string(b.priority))
 		}
-		padding := max(1, w-len(leftIndicator)-len(rightIndicator))
-		scrollBar = helpStyle.Render(leftIndicator + strings.Repeat(" ", padding) + rightIndicator)
+		extra = append(extra, filterBarStyle.Render(fmt.Sprintf(" filter: %s (%d cards)", strings.Join(parts, ", "), a.totalFilteredCardCount()))+
+			helpStyle.Render("  (/ to change, esc clears)"))
 	}
-
-	contentHeight := h - lipgloss.Height(titleBar) - lipgloss.Height(statusBar) - 1
-	if scrollBar != "" {
-		contentHeight--
-	}
-	if filterBar != "" {
-		contentHeight--
-	}
-	if errBar != "" {
-		contentHeight--
-	}
-
-	var columnContent string
-	if a.board.confirming != "" {
-		columnContent = a.renderConfirmDialog(w, contentHeight)
-	} else {
-		columnContent = a.renderColumns(w, contentHeight)
-	}
-
-	var sections []string
-	sections = append(sections, titleBar)
-	if scrollBar != "" {
-		sections = append(sections, scrollBar)
-	}
-	sections = append(sections, columnContent)
-	if errBar != "" {
-		sections = append(sections, errBar)
-	}
-	if filterBar != "" {
-		sections = append(sections, filterBar)
-	}
-	sections = append(sections, statusBar)
-
-	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+	return a.frame(a.boardTitle(), hints, extra, func(w, h int) string {
+		if b.confirming != "" {
+			return a.renderConfirmDialog(w, h)
+		}
+		return a.renderColumns(w, h)
+	})
 }
 
-func (a *App) renderConfirmDialog(totalWidth, contentHeight int) string {
+func (a *App) scrollIndicator(w int) string {
+	b := &a.board
+	n, visible := len(b.lanes), a.visibleColumnCount()
+	if n == 0 || visible >= n {
+		return ""
+	}
+	var left, right string
+	if b.scrollCol > 0 {
+		left = fmt.Sprintf("< %d more", b.scrollCol)
+	}
+	if hidden := n - b.scrollCol - visible; hidden > 0 {
+		right = fmt.Sprintf("%d more >", hidden)
+	}
+	return helpStyle.Render(left + strings.Repeat(" ", max(1, w-len(left)-len(right))) + right)
+}
+
+func (a *App) renderConfirmDialog(w, h int) string {
+	b := &a.board
 	card := a.selectedCard()
 	if card == nil {
-		return renderCenteredConfirm(totalWidth, contentHeight, "No card selected")
+		return renderCenteredConfirm(w, h, "No card selected")
 	}
-
 	var prompt string
-	switch a.board.confirming {
+	switch b.confirming {
 	case "move":
-		origCol := a.board.columns[a.board.moveOrigCol]
-		targetCol := a.board.columns[a.board.focusCol]
-		if origCol.ID == targetCol.ID {
-			prompt = fmt.Sprintf("Reorder %q in %s?", truncate(card.Title, 25), targetCol.Name)
+		from, to := b.lanes[b.moveOrigCol].Name, b.lanes[b.focusCol].Name
+		if from == to {
+			prompt = fmt.Sprintf("Reorder %q in %s?", truncate(card.Title, 25), to)
 		} else {
-			prompt = fmt.Sprintf("Move %q from %s to %s?", truncate(card.Title, 20), origCol.Name, targetCol.Name)
+			prompt = fmt.Sprintf("Move %q from %s to %s?", truncate(card.Title, 20), from, to)
 		}
+	case "archive":
+		prompt = fmt.Sprintf("Archive %q?", truncate(card.Title, 30))
 	default:
-		verb := a.board.confirming
-		if len(verb) > 0 {
-			verb = strings.ToUpper(verb[:1]) + verb[1:]
-		}
-		prompt = fmt.Sprintf("%s %q?", verb, truncate(card.Title, 30))
+		prompt = fmt.Sprintf("Delete %q from the board?", truncate(card.Title, 30))
 	}
-
-	return renderCenteredConfirm(totalWidth, contentHeight, prompt)
+	return renderCenteredConfirm(w, h, prompt)
 }
 
 func (a *App) renderColumns(totalWidth, maxHeight int) string {
-	numCols := len(a.board.columns)
-	if numCols == 0 {
-		msg := lipgloss.Place(totalWidth, maxHeight, lipgloss.Center, lipgloss.Center,
-			helpStyle.Render("No columns found."))
-		return msg
+	b := &a.board
+	n := len(b.lanes)
+	if n == 0 {
+		return lipgloss.Place(totalWidth, maxHeight, lipgloss.Center, lipgloss.Center, helpStyle.Render("No columns. Add one with: kb column add <name>"))
 	}
-
-	startCol := a.board.scrollCol
-	endCol := min(startCol+a.visibleColumnCount(), numCols)
-	displayCount := endCol - startCol
-	availableWidth := totalWidth - (displayCount-1)
-	colWidth := max(availableWidth/displayCount, 16)
-
-	var renderedCols []string
-	for i := startCol; i < endCol; i++ {
-		renderedCols = append(renderedCols, a.renderSingleColumn(a.board.columns[i], i, colWidth, maxHeight))
-	}
-
-	divStyle := lipgloss.NewStyle().
-		Faint(true).
-		Height(maxHeight)
-
-	divStr := divStyle.Render(strings.Repeat("│\n", maxHeight-1) + "│")
-
+	start := b.scrollCol
+	end := min(start+a.visibleColumnCount(), n)
+	shown := end - start
+	colWidth := max((totalWidth-(shown-1))/shown, 16)
+	divider := lipgloss.NewStyle().Faint(true).Render(strings.Repeat("│\n", maxHeight-1) + "│")
 	var parts []string
-	for i, col := range renderedCols {
-		parts = append(parts, col)
-		if i < len(renderedCols)-1 {
-			parts = append(parts, divStr)
+	for i := start; i < end; i++ {
+		if i > start {
+			parts = append(parts, divider)
 		}
+		parts = append(parts, a.renderSingleColumn(b.lanes[i], i, colWidth, maxHeight))
 	}
-
 	return lipgloss.JoinHorizontal(lipgloss.Top, parts...)
 }
 
-func (a *App) renderSingleColumn(col *model.Column, colIdx, width, maxHeight int) string {
-	cards := a.cardsForDisplay(col.ID)
-
-	countStr := fmt.Sprintf("%d", len(cards))
-	if col.WIPLimit != nil {
-		countStr = fmt.Sprintf("%d/%d", len(cards), *col.WIPLimit)
+func labelText(c *model.Card) string {
+	labels := c.LabelList()
+	if len(labels) == 0 {
+		return ""
 	}
+	return "#" + strings.Join(labels, " #")
+}
 
-	headerText := fmt.Sprintf("%s (%s)", col.Name, countStr)
-
+func (a *App) renderSingleColumn(lane fstore.Lane, colIdx, width, maxHeight int) string {
+	cards := a.cardsForDisplay(lane.Name)
+	// The limit counts every card in the column, shown or not.
+	total := len(a.board.cards[lane.Name])
+	count := fmt.Sprintf("%d", len(cards))
+	if lane.WIPLimit != nil {
+		count = fmt.Sprintf("%d/%d", total, *lane.WIPLimit)
+	}
 	hStyle := columnHeaderStyle
 	if colIdx == a.board.focusCol {
 		hStyle = columnHeaderActiveStyle
 	}
-	if col.WIPLimit != nil && len(cards) >= *col.WIPLimit {
+	if lane.WIPLimit != nil && total >= *lane.WIPLimit {
 		hStyle = hStyle.Reverse(true)
 	}
-
-	header := hStyle.Width(width).Padding(0, 1).Render(headerText)
-
-	separator := lipgloss.NewStyle().
-		Faint(true).
-		Width(width).
-		Padding(0, 1).
-		Render(strings.Repeat("─", width-2))
-
-	var cardLines []string
-	cardLines = append(cardLines, header)
-	cardLines = append(cardLines, separator)
-
+	lines := []string{
+		hStyle.Width(width).Padding(0, 1).Render(truncate(fmt.Sprintf("%s (%s)", lane.Name, count), width-2)),
+		lipgloss.NewStyle().Faint(true).Width(width).Padding(0, 1).Render(strings.Repeat("─", max(0, width-2))),
+	}
 	if len(cards) == 0 {
-		empty := emptyColumnStyle.
-			Width(width).
-			Padding(0, 1).
-			Render("no cards")
-		cardLines = append(cardLines, empty)
+		lines = append(lines, emptyColumnStyle.Width(width).Padding(0, 1).Render("no cards"))
 	}
 
-	cardInnerWidth := max(width-4, 10)
-
-	for cardIdx, card := range cards {
-		isSelected := colIdx == a.board.focusCol && cardIdx == a.board.focusCard
-
-		style := cardNormalBorder.Width(width - 2)
-		if isSelected {
-			style = cardSelectedBorder.Width(width - 2)
+	inner := max(width-4, 10)
+	var rendered []string
+	var heights []int
+	for i, card := range cards {
+		selected := colIdx == a.board.focusCol && i == a.board.focusCard
+		style, prefix := cardNormalBorder.Width(width-2), " "
+		if selected {
+			style, prefix = cardSelectedBorder.Width(width-2), "▸"
 		}
-
-		prefix := " "
-		if isSelected {
-			prefix = "▸"
+		content := prefix + truncate(card.Title, inner-1)
+		content += "\n " + priorityStyle(string(card.Priority)).Render(string(card.Priority))
+		if l := labelText(card); l != "" {
+			content += "\n " + labelStyle.Render(truncate(l, inner-1))
 		}
-
-		pStyle := priorityStyle(string(card.Priority))
-		titleLine := fmt.Sprintf("%s%s", prefix, truncate(card.Title, cardInnerWidth-1))
-		prioLine := " " + pStyle.Render(string(card.Priority))
-
-		content := titleLine + "\n" + prioLine
-		if card.Labels != "" {
-			content += "\n " + labelStyle.Render(truncate(card.Labels, cardInnerWidth-1))
-		}
-
-		rendered := style.Render(content)
-		cardLines = append(cardLines, rendered)
+		r := style.Render(content)
+		rendered = append(rendered, r)
+		heights = append(heights, lipgloss.Height(r))
 	}
 
-	body := lipgloss.JoinVertical(lipgloss.Left, cardLines...)
-
-	return lipgloss.NewStyle().
-		Width(width).
-		Height(maxHeight).
-		Render(body)
+	// Show the cards around the selected one that fit, with a line for
+	// those above and below.
+	focus := 0
+	if colIdx == a.board.focusCol {
+		focus = a.board.focusCard
+	}
+	// Make room for the "more" lines the window needs; making room can
+	// shift the window and call for the other one too.
+	avail := maxHeight - len(lines)
+	reserve := 0
+	var start, end int
+	for {
+		start, end = window(heights, focus, max(1, avail-reserve))
+		need := 0
+		if start > 0 {
+			need++
+		}
+		if end < len(rendered) {
+			need++
+		}
+		if need <= reserve {
+			break
+		}
+		reserve = need
+	}
+	if start > 0 {
+		lines = append(lines, helpStyle.Width(width).Padding(0, 1).Render(fmt.Sprintf("↑ %d more", start)))
+	}
+	lines = append(lines, rendered[start:end]...)
+	if end < len(rendered) {
+		lines = append(lines, helpStyle.Width(width).Padding(0, 1).Render(fmt.Sprintf("↓ %d more", len(rendered)-end)))
+	}
+	return lipgloss.NewStyle().Width(width).Height(maxHeight).MaxHeight(maxHeight).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
 }
 
 func (a *App) viewBoardHelp() string {
-	w := a.width
-	if w == 0 {
-		w = 80
-	}
-	h := a.height
-	if h == 0 {
-		h = 24
-	}
-
-	helpBoardLabel := a.board.board.Name
-	if a.wsContent.workspace != nil {
-		helpBoardLabel = a.wsContent.workspace.Name + " > " + a.board.board.Name
-	}
-	titleBar := titleBarStyle.Width(w).Render(fmt.Sprintf(" kb: %s ", helpBoardLabel))
-	statusBar := statusBarStyle.Width(w).Render(" Press any key to close help")
-
 	entries := []struct{ key, desc string }{
 		{"h / l", "Focus previous/next column"},
-		{"j / k", "Select card up/down"},
+		{"j / k", "Select card down/up"},
 		{"H / L", "Move card across columns"},
 		{"J / K", "Reorder card within column"},
 		{"", "  (then h/l/j/k to position, Enter to confirm)"},
 		{"n", "New card"},
-		{"Enter", "View card details"},
+		{"Enter", "View card"},
 		{"e", "Edit card"},
 		{"d", "Archive card"},
 		{"D", "Delete card"},
-		{"/", "Filter by label or priority"},
-		{"1-4", "Filter by priority"},
-		{"b", "Switch board"},
-		{"?", "Toggle this help"},
+		{"/", "Filter by text or label"},
+		{"1-4", "Show only urgent/high/medium/low"},
+		{"Esc", "Clear the filters"},
+		{"b", "Back to the workspace"},
+		{"?", "This help"},
 		{"q", "Quit"},
 	}
-
-	var helpLines []string
+	var lines []string
 	for _, e := range entries {
-		line := fmt.Sprintf("  %s  %s",
-			formLabelActiveStyle.Width(12).Render(e.key),
-			e.desc)
-		helpLines = append(helpLines, line)
+		lines = append(lines, fmt.Sprintf("  %s  %s", formLabelActiveStyle.Width(12).Render(e.key), e.desc))
 	}
-
-	helpContent := lipgloss.JoinVertical(lipgloss.Left, helpLines...)
-	dialog := dialogBoxStyle.Render(helpContent)
-
-	contentHeight := h - lipgloss.Height(titleBar) - lipgloss.Height(statusBar) - 1
-	content := lipgloss.Place(w, contentHeight, lipgloss.Center, lipgloss.Center, dialog)
-
-	return lipgloss.JoinVertical(lipgloss.Left, titleBar, content, statusBar)
+	return a.frame(a.boardTitle(), " Press any key to close help", nil, func(w, h int) string {
+		return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, dialogBoxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, lines...)))
+	})
 }
 
 func progressBar(done, total, width int) string {

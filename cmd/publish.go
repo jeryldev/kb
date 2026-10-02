@@ -6,48 +6,47 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/jeryldev/kb/internal/fstore"
 	"github.com/jeryldev/kb/internal/model"
 	"github.com/jeryldev/kb/internal/publish"
-	"github.com/jeryldev/kb/internal/store"
 	"github.com/spf13/cobra"
 )
 
 var publishCmd = &cobra.Command{
-	Use:   "publish <note-slug-or-id>",
-	Short: "Publish a note to a configured target",
-	Args:  cobra.ExactArgs(1),
+	Use:   "publish <note>",
+	Short: "Publish a note to a site",
+	Long: `Publish a note as a post to a site set up with kb publish setup.
+
+Where each note was published is kept in its frontmatter (published:), so
+publishing again updates the same post. Sites are machine-local settings,
+kept in ~/.config/kb/publish.yml.
+
+A note named like a subcommand (list, setup, delete) goes after --:
+  kb publish -- list`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		note, err := resolveNote(args[0])
 		if err != nil {
 			return err
 		}
-
 		targetName, _ := cmd.Flags().GetString("target")
 		target, err := resolvePublishTarget(targetName)
 		if err != nil {
 			return err
 		}
-
 		draft, _ := cmd.Flags().GetBool("draft")
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
 
-		posts, err := db.GetPublishedPosts(target.ID)
-		if err != nil {
-			return fmt.Errorf("getting published posts: %w", err)
-		}
+		posts := db.PublishedPosts(target.Name)
 
 		// A post is dated by the day the note was written, on the writer's
 		// calendar, and a note published before keeps its post, so
 		// republishing updates it in place.
 		date := note.CreatedAt.In(time.Local)
 		relPath := ""
-		prev, err := db.GetLatestPublishLog(note.ID, target.ID)
-		if err != nil {
-			return err
-		}
-		if prev != nil {
-			if prevDate, ok := publish.PostDateFromPath(prev.FilePath); ok {
-				date, relPath = prevDate, prev.FilePath
+		if prev, ok := db.LatestPost(note.ID, target.Name); ok {
+			if prevDate, ok := publish.PostDateFromPath(prev.Path); ok {
+				date, relPath = prevDate, prev.Path
 			}
 		}
 		if relPath == "" {
@@ -60,7 +59,7 @@ var publishCmd = &cobra.Command{
 			if post.Draft {
 				continue
 			}
-			if permalink, ok := publish.PermalinkFromPostPath(post.Path); ok {
+			if permalink, ok := publish.PermalinkFor(target.Permalink, post.Path); ok {
 				permalinks[noteID] = permalink
 			}
 		}
@@ -82,25 +81,19 @@ var publishCmd = &cobra.Command{
 			return nil
 		}
 
-		dir := filepath.Dir(fullPath)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("creating directory %s: %w", dir, err)
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+			return fmt.Errorf("creating directory for %s: %w", fullPath, err)
 		}
-
 		if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
-			return fmt.Errorf("writing file %s: %w", fullPath, err)
+			return fmt.Errorf("writing %s: %w", fullPath, err)
 		}
-
-		frontMatter := publish.GenerateFrontMatter(note, date, draft)
-		pl, err := db.CreatePublishLog(note.ID, target.ID, relPath, frontMatter)
-		if err != nil {
-			return fmt.Errorf("recording publish log: %w", err)
+		if err := db.RecordPublish(note.ID, target.Name, relPath, draft); err != nil {
+			return fmt.Errorf("wrote %s but could not record it in the note: %w", fullPath, err)
 		}
 
 		if jsonOutput {
-			return printJSON(toPublishLogJSON(pl, note.Slug))
+			return printJSON(publicationJSON{Note: note.Slug, Target: target.Name, FilePath: relPath, Draft: draft})
 		}
-
 		label := "Published"
 		if draft {
 			label = "Published (draft)"
@@ -112,10 +105,9 @@ var publishCmd = &cobra.Command{
 
 var publishSetupCmd = &cobra.Command{
 	Use:   "setup <name>",
-	Short: "Configure a publish target",
+	Short: "Set up a site to publish to",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		name := args[0]
 		engineStr, _ := cmd.Flags().GetString("engine")
 		engine, err := model.ParseEngine(engineStr)
 		if err != nil {
@@ -123,28 +115,25 @@ var publishSetupCmd = &cobra.Command{
 		}
 		basePath, _ := cmd.Flags().GetString("path")
 		if basePath == "" {
-			return fmt.Errorf("--path is required")
+			return fmt.Errorf("--path is required: the site's folder")
 		}
 		postsDir, _ := cmd.Flags().GetString("posts-dir")
-
-		var wsID *string
+		wsID := ""
 		if wsName, _ := cmd.Flags().GetString("workspace"); wsName != "" {
-			ws, wsErr := resolveWorkspace(wsName)
-			if wsErr != nil {
-				return wsErr
+			ws, err := resolveWorkspace(wsName)
+			if err != nil {
+				return err
 			}
-			wsID = &ws.ID
+			wsID = ws.ID
 		}
-
-		pt, err := db.CreatePublishTarget(name, engine, basePath, postsDir, wsID)
+		permalink, _ := cmd.Flags().GetString("permalink")
+		pt, err := db.CreatePublishTarget(args[0], engine, basePath, postsDir, permalink, wsID)
 		if err != nil {
 			return err
 		}
-
 		if jsonOutput {
 			return printJSON(toPublishTargetJSON(pt))
 		}
-
 		fmt.Fprintf(cmd.OutOrStdout(), "Created publish target %q (%s) at %s\n", pt.Name, pt.Engine, pt.BasePath)
 		return nil
 	},
@@ -152,135 +141,90 @@ var publishSetupCmd = &cobra.Command{
 
 var publishListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List publish targets, or a target's publications with --target",
+	Short: "List publish targets, or a target's posts with --target",
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		targetName, _ := cmd.Flags().GetString("target")
-
-		if targetName != "" {
+		if targetName, _ := cmd.Flags().GetString("target"); targetName != "" {
 			target, err := resolvePublishTarget(targetName)
 			if err != nil {
 				return err
 			}
-			logs, err := db.ListPublishLogs(target.ID)
-			if err != nil {
-				return err
-			}
-
+			pubs := db.Publications(target.Name)
 			if jsonOutput {
-				out := make([]publishLogJSON, len(logs))
-				for i, l := range logs {
-					slug := resolveNoteSlug(l.NoteID)
-					out[i] = toPublishLogJSON(l, slug)
-				}
-				return printJSON(out)
+				return jsonList(pubs, func(p fstore.Publication) publicationJSON {
+					return publicationJSON{Note: p.Note.Slug, Target: target.Name, FilePath: p.Path, Draft: p.Draft}
+				})
 			}
-
-			if len(logs) == 0 {
-				fmt.Fprintf(cmd.OutOrStdout(), "No publications for target %q\n", target.Name)
+			out := cmd.OutOrStdout()
+			if len(pubs) == 0 {
+				fmt.Fprintf(out, "No posts on %q yet\n", target.Name)
 				return nil
 			}
-
-			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "Publications for %q:\n\n", target.Name)
-			for _, l := range logs {
-				slug := resolveNoteSlug(l.NoteID)
-				fmt.Fprintf(out, "  %s  %s  %s\n",
-					l.PublishedAt.Format("02 Jan 2006"),
-					slug,
-					l.FilePath)
+			fmt.Fprintf(out, "Posts on %q:\n\n", target.Name)
+			for _, p := range pubs {
+				draft := ""
+				if p.Draft {
+					draft = "  (draft)"
+				}
+				fmt.Fprintf(out, "  %s  %s%s\n", p.Path, p.Note.Title, draft)
 			}
 			return nil
 		}
 
-		targets, err := db.ListPublishTargets()
-		if err != nil {
-			return err
-		}
-
-		if len(targets) == 0 {
-			if jsonOutput {
-				return printJSON([]publishTargetJSON{})
-			}
-			fmt.Fprintln(cmd.OutOrStdout(), "No publish targets. Set one up with: kb publish setup \"name\" --engine jekyll --path /path/to/site")
-			return nil
-		}
-
+		targets := db.ListPublishTargets()
 		if jsonOutput {
-			out := make([]publishTargetJSON, len(targets))
-			for i, pt := range targets {
-				out[i] = toPublishTargetJSON(pt)
-			}
-			return printJSON(out)
+			return jsonList(targets, toPublishTargetJSON)
 		}
-
-		out := cmd.OutOrStdout()
+		if len(targets) == 0 {
+			fmt.Fprintln(cmd.OutOrStdout(), "No publish targets. Set one up with: kb publish setup \"name\" --engine jekyll --path ~/path/to/site")
+			return nil
+		}
 		for _, pt := range targets {
-			fmt.Fprintf(out, "%s  %s  %s/%s\n", pt.Name, pt.Engine, pt.BasePath, pt.PostsDir)
+			fmt.Fprintf(cmd.OutOrStdout(), "%s  %s  %s\n", pt.Name, pt.Engine, filepath.Join(pt.BasePath, pt.PostsDir))
 		}
 		return nil
 	},
 }
 
 var publishDeleteCmd = &cobra.Command{
-	Use:   "delete <target-name>",
-	Short: "Delete a publish target",
+	Use:   "delete <target>",
+	Short: "Forget a publish target (its posts and the notes' history stay)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		target, err := resolvePublishTarget(args[0])
 		if err != nil {
 			return err
 		}
-
-		if err := db.DeletePublishTarget(target.ID); err != nil {
+		if err := db.DeletePublishTarget(target.Name); err != nil {
 			return err
 		}
-
 		if jsonOutput {
 			return printJSON(toPublishTargetJSON(target))
 		}
-
 		fmt.Fprintf(cmd.OutOrStdout(), "Deleted publish target %q\n", target.Name)
 		return nil
 	},
 }
 
-func resolvePublishTarget(nameOrID string) (*model.PublishTarget, error) {
-	if nameOrID == "" {
-		targets, err := db.ListPublishTargets()
-		if err != nil {
-			return nil, err
-		}
-		if len(targets) == 0 {
-			return nil, fmt.Errorf("no publish targets configured; run: kb publish setup")
-		}
-		if len(targets) == 1 {
-			return targets[0], nil
-		}
-		return nil, fmt.Errorf("multiple publish targets exist; specify one with --target")
+// resolvePublishTarget finds a target by name; with no name, the only one.
+func resolvePublishTarget(name string) (*model.PublishTarget, error) {
+	if name != "" {
+		return db.GetPublishTarget(name)
 	}
-	pt, err := db.GetPublishTargetByName(nameOrID)
-	if err == nil {
-		return pt, nil
+	targets := db.ListPublishTargets()
+	switch len(targets) {
+	case 0:
+		return nil, fmt.Errorf("no publish targets yet; set one up with: kb publish setup")
+	case 1:
+		return targets[0], nil
 	}
-	pt, err = db.GetPublishTarget(nameOrID)
-	if err == nil {
-		return pt, nil
-	}
-	return nil, fmt.Errorf("publish target %q not found", nameOrID)
-}
-
-func resolveNoteSlug(noteID string) string {
-	note, err := db.GetNote(noteID)
-	if err != nil {
-		return noteID[:8]
-	}
-	return note.Slug
+	return nil, fmt.Errorf("there are %d publish targets; choose one with --target", len(targets))
 }
 
 // freePostPath is the post path for a note's first publish, with -2, -3
 // added to the slug when another note's post (one renamed since, say) or a
 // file kb did not write already has the name.
-func freePostPath(basePath, postsDir string, note *model.Note, date time.Time, posts map[string]store.PublishedPost) string {
+func freePostPath(basePath, postsDir string, note *model.Note, date time.Time, posts map[string]fstore.Post) string {
 	taken := map[string]bool{}
 	for noteID, post := range posts {
 		if noteID != note.ID {
@@ -298,19 +242,18 @@ func freePostPath(basePath, postsDir string, note *model.Note, date time.Time, p
 }
 
 func init() {
-	publishCmd.Flags().StringP("target", "t", "", "Publish target name (auto-selects if only one exists)")
-	publishCmd.Flags().Bool("draft", false, "Publish as draft (published: false)")
-	publishCmd.Flags().Bool("dry-run", false, "Preview output without writing file")
+	publishCmd.Flags().StringP("target", "t", "", "Publish target (default: the only one)")
+	publishCmd.Flags().Bool("draft", false, "Publish as a draft (published: false)")
+	publishCmd.Flags().Bool("dry-run", false, "Show the post without writing it")
 
-	publishSetupCmd.Flags().StringP("engine", "e", "jekyll", "Publishing engine")
-	publishSetupCmd.Flags().StringP("path", "p", "", "Base path to the site directory")
-	publishSetupCmd.Flags().String("posts-dir", "_posts", "Posts directory within the site")
-	publishSetupCmd.Flags().StringP("workspace", "w", "", "Associated workspace")
+	publishSetupCmd.Flags().StringP("engine", "e", "jekyll", "Site engine")
+	publishSetupCmd.Flags().StringP("path", "p", "", "The site's folder (absolute, or starting with ~/)")
+	publishSetupCmd.Flags().String("posts-dir", "_posts", "Posts folder within the site")
+	publishSetupCmd.Flags().StringP("workspace", "w", "", "Workspace the target is for")
+	publishSetupCmd.Flags().String("permalink", "", "The site's permalink pattern, for links between posts (default "+publish.DefaultPermalink+")")
 
-	publishListCmd.Flags().StringP("target", "t", "", "Show publications for specific target")
+	publishListCmd.Flags().StringP("target", "t", "", "List this target's posts")
 
-	publishCmd.AddCommand(publishSetupCmd)
-	publishCmd.AddCommand(publishListCmd)
-	publishCmd.AddCommand(publishDeleteCmd)
+	publishCmd.AddCommand(publishSetupCmd, publishListCmd, publishDeleteCmd)
 	rootCmd.AddCommand(publishCmd)
 }

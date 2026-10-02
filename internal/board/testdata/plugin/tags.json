@@ -1,0 +1,41 @@
+{
+  "frontmatter": {
+    "kanban-plugin": "board"
+  },
+  "settings": {
+    "kanban-plugin": "board"
+  },
+  "lanes": [
+    {
+      "title": "Todo",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "Fix #ui login on the mobile app",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": [
+            "#ui"
+          ]
+        },
+        {
+          "titleRaw": "Fix \\#3 bug with escaped hash",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": []
+        },
+        {
+          "titleRaw": "Card with #priority/high and #some-label",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": [
+            "#priority/high",
+            "#some-label"
+          ]
+        }
+      ]
+    }
+  ],
+  "archive": []
+}

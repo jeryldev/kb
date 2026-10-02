@@ -28,14 +28,8 @@ type PublishTarget struct {
 	Engine      Engine
 	BasePath    string
 	PostsDir    string
-	CreatedAt   time.Time
-}
-
-type PublishLog struct {
-	ID          string
-	NoteID      string
-	TargetID    string
-	FilePath    string
-	FrontMatter string
-	PublishedAt time.Time
+	// Permalink is the site's Jekyll permalink pattern, such as
+	// "/blog/:year/:month/:day/:title/", for links between posts.
+	Permalink string
+	CreatedAt time.Time
 }

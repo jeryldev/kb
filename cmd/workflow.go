@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jeryldev/kb/internal/editor"
+	"github.com/jeryldev/kb/internal/fstore"
 	"github.com/jeryldev/kb/internal/model"
 	"github.com/spf13/cobra"
 )
@@ -18,8 +20,7 @@ var openCmd = &cobra.Command{
 	Long: `Open a note's Markdown file in $VISUAL or $EDITOR.
 
 The note can be named the way a wikilink would name it: its title, file
-name, slug or an alias, in any case. kb rescans the vault when the editor
-exits.`,
+name, slug or an alias, in any case.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		note, err := resolveNote(args[0])
@@ -54,11 +55,10 @@ KB_DAILY_DIR (default "daily").`,
 
 		note, err := db.GetNoteByPath(rel)
 		if err != nil {
-			wsID, err := resolveWorkspaceIDForCreate("")
-			if err != nil {
+			if !errors.Is(err, fstore.ErrNotFound) {
 				return err
 			}
-			if note, err = db.CreateNoteAt(rel, date, "", wsID); err != nil {
+			if note, err = db.CreateNoteAt(rel, date, "", db.DefaultWorkspace().ID); err != nil {
 				return err
 			}
 		}
@@ -71,16 +71,9 @@ var tagsCmd = &cobra.Command{
 	Short: "List note tags, most used first",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		tags, err := db.ListTags()
-		if err != nil {
-			return err
-		}
+		tags := db.ListTags()
 		if jsonOutput {
-			out := make([]tagJSON, len(tags))
-			for i, t := range tags {
-				out[i] = tagJSON{Tag: t.Tag, Notes: t.Count}
-			}
-			return printJSON(out)
+			return jsonList(tags, func(t fstore.TagCount) tagJSON { return tagJSON{Tag: t.Tag, Notes: t.Count} })
 		}
 		if len(tags) == 0 {
 			fmt.Fprintln(cmd.OutOrStdout(), "No tags yet. Add some with: kb note edit <note> --tags a,b")
@@ -95,13 +88,8 @@ var tagsCmd = &cobra.Command{
 	},
 }
 
-type tagJSON struct {
-	Tag   string `json:"tag"`
-	Notes int    `json:"notes"`
-}
-
-// editNoteFile runs the editor on the note's file, then rescans, since
-// the file may have changed in any way.
+// editNoteFile runs the editor on the note's file, then reads the vault
+// again.
 func editNoteFile(note *model.Note) error {
 	path, err := db.Vault().Abs(note.Path)
 	if err != nil {
@@ -112,7 +100,8 @@ func editNoteFile(note *model.Note) error {
 		return err
 	}
 	runErr := cmd.Run()
-	if _, err := db.Scan(); err != nil {
+	// The editor may have changed anything in the file.
+	if err := db.Reload(); err != nil {
 		return err
 	}
 	if runErr != nil {

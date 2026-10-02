@@ -1,8 +1,8 @@
 # kb
 
-A terminal knowledge management tool for personal projects. Kanban boards, notes with wikilinks, workspace organization, and graph visualization — all in a tmux popup.
+Notes and Kanban boards for your terminal, kept as plain Markdown files: notes with wikilinks, boards in the format of Obsidian's Kanban plugin, workspaces, a link graph and publishing to Jekyll. It runs well in a tmux popup.
 
-Notes are plain Markdown files in a folder you own (the vault), named by their titles, with YAML frontmatter, so they also open in any editor, in git, or in Obsidian on your phone. kb keeps a search and link index beside them that it can always rebuild from the files.
+Everything kb keeps is a file in a folder you own, the vault. Notes are Markdown named by their titles, boards are Markdown that the [Obsidian Kanban plugin](https://github.com/mgmeyers/obsidian-kanban) opens as boards, and workspaces are listed in the vault's `.kb/workspaces.yml`. There is no database: kb reads the vault when it starts, so any editor, sync tool, git or Obsidian on your phone can change the files too.
 
 ## Install
 
@@ -11,108 +11,156 @@ brew tap jeryldev/tap
 brew install kb
 ```
 
-Or build from source (requires Go 1.24+):
+Or build from source (Go 1.24+):
 
 ```bash
 go install github.com/jeryldev/kb@latest
 ```
 
-No external dependencies are required at runtime. The SQLite index is embedded via a pure-Go driver ([modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite)) — no CGo or system libraries needed.
+kb is a single binary with no runtime dependencies. Upgrading from 0.3 also needs the `sqlite3` program once, for `kb import` (macOS has it).
 
-## Quick Start
-
-```bash
-# Create a workspace and board
-kb workspace create my-project
-kb board create sprint-1
-
-# Add cards
-kb card add "Fix login bug" -p urgent
-kb card add "Add authentication" -c Todo -p medium
-
-# Write notes
-kb daily                               # Today's daily note in $EDITOR
-kb note create "Architecture decisions"
-kb open "architecture decisions"       # Open any note by name in $EDITOR
-
-# Launch TUI
-kb
-```
-
-## Features
-
-### Kanban Boards
-
-Full kanban board management with columns, cards, priorities, labels, and WIP limits.
-
-### Notes and Wikilinks
-
-Each note is a Markdown file in the vault (`$KB_VAULT`, default `~/notes`), named by its title, like `Meeting notes.md`. Edit the files with any editor, sync tool or app: kb rescans the vault every time it starts and picks up new, changed, moved and deleted files. A file with no frontmatter is a note too, so an existing Obsidian vault works as is, and kb never rewrites a file just by reading it.
-
-Links work the way Obsidian reads them. `[[Meeting notes]]`, `[[meeting notes]]`, `[[folder/Meeting notes]]`, `[[Meeting notes#Decisions]]`, `[[Meeting notes|the meeting]]` and an alias from the note's `aliases:` all resolve to the same note, and a link to a note that does not exist yet starts working when you create it. Link to cards with `[[card:Fix login bug]]` and boards with `[[board:sprint-1]]`. Backlinks are tracked automatically.
+## Quick start
 
 ```bash
-kb daily                               # Open (or start) today's daily note
-kb daily --date 2026-10-01             # Another day's
-kb open "meeting notes"                # Open a note by title, alias, file name or slug
-kb note rename meeting-notes "Q4 kickoff"   # Rename the file and rewrite links to it
-kb note backlinks meeting-notes        # Show what links to this note
-kb note search "authentication flow"   # Every word, as a prefix, best match first
-kb notes --tag design                  # Filter by tag
-kb tags                                # Tags, most used first
-kb index                               # What the last scan found; --rebuild re-reads all
-```
+export KB_VAULT=~/notes                # where everything lives (the default)
 
-Frontmatter kb understands: `title` (when it differs from the file name), `tags`, `aliases`, `pinned`, `workspace`, `created` and `archived`. Other keys are kept untouched when kb edits a note.
-
-### Workspaces
-
-Organize boards and notes into workspaces using PARA kinds (projects, areas, resources, archives).
-
-```bash
 kb workspace create backend --kind project
-kb workspace board move sprint-1 --workspace backend
-kb workspace note move architecture-decisions --workspace backend
-kb workspace show backend              # Lists boards and notes
+kb board create sprint-1 -w backend    # Boards/sprint-1.md
+
+kb card add "Fix login bug" -B sprint-1 -p urgent
+kb card add "Add authentication" -B sprint-1 -c Todo -l "auth, backend"
+
+kb note create "Architecture decisions" -w backend
+kb open "architecture decisions"       # edit the file in $EDITOR
+kb daily                               # today's daily note
+
+kb                                     # the TUI
 ```
 
-### Graph Visualization
+Card and column commands work on one board: `--board`/`-B`, or `$KB_BOARD`, or else the board named after the folder you are in, or after its git repository (also from a worktree). So inside `~/code/sprint-1` plain `kb cards` is enough.
 
-Visualize note connections as a force-directed graph in your browser.
+## Notes and wikilinks
+
+Each note is a Markdown file in the vault (`$KB_VAULT`, default `~/notes`), named by its title, like `Meeting notes.md`. A file with no frontmatter is a note too, so an existing Obsidian vault works as is, and kb never rewrites a file just by reading it.
+
+Links work the way Obsidian reads them. `[[Meeting notes]]`, `[[meeting notes]]`, `[[folder/Meeting notes]]`, `[[Meeting notes#Decisions]]`, `[[Meeting notes|the meeting]]` and an alias from the note's `aliases:` all resolve to the same note, and a link to a note that does not exist yet starts working when you create it. Cards can link to notes too, and `[[sprint-1]]` links a board. Links inside code are not links.
 
 ```bash
-kb graph                               # Text summary
-kb graph --open                        # Open D3.js visualization in browser
-kb graph --workspace backend           # Scope to workspace
-kb graph --json                        # JSON node/edge data
+kb daily                               # open (or start) today's daily note
+kb daily --date 2026-10-01             # another day's
+kb open "meeting notes"                # open a note by title, alias, file name or slug
+kb note rename "meeting notes" "Q4 kickoff"   # rename the file and rewrite links to it
+kb note backlinks "q4 kickoff"         # notes and cards that link to it
+kb note search authentication flow     # every word, as a prefix, accents ignored
+kb notes --tag design                  # filter by tag (--search too)
+kb tags                                # tags, most used first
+kb note delete "old idea"              # moves the file to the vault's .trash/
+kb index                               # what kb finds in the vault, and any problems
 ```
 
-Note: The HTML visualization loads D3.js from CDN and requires an internet connection.
+Frontmatter kb understands: `title` (when it differs from the file name), `tags`, `aliases`, `pinned`, `workspace`, `created`, `archived` and `published`. Other keys are kept as they are when kb edits a note.
 
-### Publish to Jekyll
+## Kanban boards
 
-Export notes as Jekyll-compatible blog posts with front matter and resolved wikilinks.
+A board is a Markdown file in the Obsidian Kanban plugin's format, made in the vault's `Boards/` folder (`$KB_BOARDS_DIR`). Any file with `kanban-plugin: board` in its frontmatter is a board, wherever it is, so boards you made in Obsidian work in kb and the other way round.
+
+```markdown
+---
+kanban-plugin: board
+workspace: backend
+---
+
+## Todo
+
+- [ ] Add authentication #auth #backend ^3f9a1c2e
+
+## In Progress (2)
+
+- [ ] Fix login bug #priority/urgent [ext:: GH-42] ^889962bb
+    The session cookie expires too early.
+```
+
+- Columns are headings; a number in parentheses is the column's WIP limit.
+- Labels are `#tags`. A label with spaces becomes dashes: "needs review" is `#needs-review`.
+- Priority is a `#priority/high` tag. Medium is the default and is not written.
+- The text after `^` is the card's id. It is unique within its board, and kb finds a card by it, or by its first 4 or more characters, on any board.
+- An external id (Jira, GitHub, Linear) is a `[ext:: …]` field.
+- Archived cards go under the board's Archive heading, as the plugin does.
 
 ```bash
-kb publish setup my-blog --path ~/blog      # posts go in ~/blog/_posts (--posts-dir)
-kb publish meeting-notes               # Export as Jekyll post
-kb publish meeting-notes --draft       # Export as draft
-kb publish meeting-notes --dry-run     # Preview without writing
-kb publish list                        # Show publish history
+kb boards                              # every board in the vault
+kb board create sprint-2 -d "Q4"       # with Backlog, Todo, In Progress, Review, Done
+kb board move sprint-2 -w backend      # into a workspace (no -w: Default)
+kb board delete sprint-2               # moves the file to .trash/ (asks first)
+
+kb cards                               # cards on the current board
+kb cards -p urgent -l auth -c Todo -s login   # filters
+kb card add "Write tests" -c Todo -p high -d "unit and e2e" -l "qa" -e GH-7
+kb card show 889962bb
+kb card edit 8899 -t "Fix the login bug" -p high
+kb card move 8899 Done                 # to the end of Done
+kb card move 8899 Todo --before 3f9a   # above another card
+kb card archive 8899
+kb card delete 8899                    # removes it from the board (asks first)
+
+kb columns
+kb column add QA
+kb column rename QA Testing
+kb column reorder "Backlog,Todo,In Progress,Testing,Review,Done"   # every column, once
+kb column wip-limit "In Progress" 2    # 0 clears it
+kb column delete Testing               # its cards are archived (asks first)
 ```
 
-A post is dated by the day its note was written (`created:`, on your local calendar), and publishing a note again updates the same post. Links to other notes become links to their posts when those are published and not drafts; otherwise they become plain text.
+Adding or moving a card into a column at its WIP limit needs `--force`.
+
+## Workspaces
+
+Workspaces group notes and boards, with PARA kinds (project, area, resource, archive). They are listed in the vault's `.kb/workspaces.yml`, so they sync with the vault; a note or board names its workspace in its frontmatter, and one that names none is in Default.
+
+```bash
+kb workspace                           # list (also: kb workspaces, kb ws)
+kb workspace create backend --kind project -d "API work" -p ~/code/api
+kb workspace show backend              # its boards and notes
+kb workspace edit backend --name api   # the new name is written into its notes and boards
+kb workspace archive api
+kb workspace delete api                # only when nothing uses it
+kb note move "meeting notes" -w backend
+```
+
+A workspace's `--path` is a folder on this machine, so it is kept in `~/.config/kb`, not in the vault.
+
+## Graph
+
+```bash
+kb graph                               # a summary
+kb graph --open                        # an interactive D3.js graph in the browser
+kb graph -w backend                    # one workspace, plus what it links to elsewhere
+kb graph --json                        # nodes (notes, boards, cards) and edges
+```
+
+The HTML graph loads D3.js from a CDN, so it needs an internet connection.
+
+## Publish to Jekyll
+
+```bash
+kb publish setup blog --path ~/blog    # posts go in ~/blog/_posts (--posts-dir)
+kb publish setup blog --path ~/blog --permalink "/:year/:month/:day/:title/"
+kb publish "meeting notes"             # write it as a post
+kb publish "meeting notes" --draft     # published: false
+kb publish "meeting notes" --dry-run   # show it, write nothing
+kb publish list                        # the sites
+kb publish list -t blog                # a site's posts
+kb publish delete blog                 # forget the site (its posts stay)
+kb publish -- list                     # a note named like a subcommand goes after --
+```
+
+A post is dated by the day its note was written (`created:`, on your local calendar), and publishing a note again updates the same post. Where each note was published is kept in its frontmatter (`published:`). Links to other notes become links to their posts when those are out (the site's `--permalink` pattern, default `/blog/:year/:month/:day/:title/`), and plain text otherwise. Sites are kept in `~/.config/kb/publish.yml`, since their paths are paths on this machine.
 
 ## TUI
 
-Launch the interactive interface with `kb`. It auto-detects which board to open:
+Run `kb` to open the TUI. It opens the current board (see Quick start) when there is one, and otherwise the workspace picker. Errors and messages show in a line above the key hints until the next key.
 
-1. `$KB_BOARD` environment variable
-2. Tmux session name (strips `dev-` prefix)
-3. Current directory name
-4. Falls back to workspace picker
-
-### Workspace Picker
+### Workspace picker
 
 | Key | Action |
 |-----|--------|
@@ -120,230 +168,133 @@ Launch the interactive interface with `kb`. It auto-detects which board to open:
 | `Enter` | Open workspace |
 | `q` | Quit |
 
-### Workspace Content
+### Workspace
 
 | Key | Action |
 |-----|--------|
 | `j` / `k` | Select a board or note |
-| `Enter` | Open selected board or note |
+| `Enter` | Open it |
 | `n` | New board |
 | `N` | New note |
-| `d` | Delete (with confirmation) |
-| `b` | Back to workspace picker |
+| `d` | Move the board or note to the trash (asks first) |
+| `b` / `Esc` | Back to the picker |
 | `q` | Quit |
 
-### Board Keybindings
+### Board
 
 | Key | Action |
 |-----|--------|
 | `h` / `l` | Focus previous/next column |
-| `j` / `k` | Select card up/down |
+| `j` / `k` | Select card down/up |
 | `H` / `L` | Move card across columns |
 | `J` / `K` | Reorder card within column |
-| `n` | New card in current column |
-| `Enter` | View card details |
+| `n` | New card in this column |
+| `Enter` | View card |
 | `e` | Edit card |
-| `d` | Archive card (with confirmation) |
-| `D` | Delete card (with confirmation) |
-| `/` | Filter by label or priority |
-| `1`-`4` | Filter by priority (1=urgent, 2=high, 3=medium, 4=low) |
-| `b` | Switch board |
-| `?` | Toggle help |
+| `d` | Archive card (asks first) |
+| `D` | Delete card (asks first) |
+| `/` | Filter by text or label |
+| `1`-`4` | Show only urgent, high, medium or low |
+| `Esc` | Clear the filters |
+| `b` | Back to the workspace |
+| `?` | Help |
 | `q` | Quit |
 
-### Card Viewer
+### Card viewer
 
 | Key | Action |
 |-----|--------|
 | `e` | Edit card |
-| `d` | Archive card (with confirmation) |
-| `D` | Delete card (with confirmation) |
-| `Esc` / `q` | Back to board |
+| `d` / `D` | Archive / delete card (asks first) |
+| `Esc` / `b` / `q` | Back to the board |
 
-### Card Editor
-
-| Key | Action |
-|-----|--------|
-| `Tab` / `Shift+Tab` | Navigate between fields |
-| `h` / `l` | Cycle priority (when on priority field) |
-| `Enter` | Save (from any field except Description) |
-| `Esc` | Cancel |
-
-### Note Browser
+### Card editor
 
 | Key | Action |
 |-----|--------|
-| `j` / `k` | Select note |
-| `/` | Filter notes |
-| `Enter` | View note |
-| `e` | Edit the note's file in `$VISUAL` / `$EDITOR` |
-| `d` | Delete note (with confirmation) |
-| `Esc` | Back to workspace |
+| `Tab` / `Shift+Tab` | Next/previous field |
+| `h` / `l` | Change priority (on the priority field) |
+| `Enter` | Save (in the description, `Ctrl+S`) |
+| `Esc` | Cancel, back where you came from |
 
-### Note Viewer
+### Note viewer
 
 | Key | Action |
 |-----|--------|
-| `j` / `k` | Scroll content |
-| `e` | Edit the note's file in `$VISUAL` / `$EDITOR`; kb reloads it when you quit the editor |
-| `Esc` / `q` | Back to note list |
+| `j` / `k` | Scroll |
+| `e` | Edit the note's file in `$VISUAL` / `$EDITOR`; kb reads it again when the editor exits |
+| `d` | Move the note to the trash (asks first) |
+| `b` / `Esc` | Back to the workspace |
+| `q` | Quit |
 
-## CLI Commands
+## Scripts and AI tools
 
-All commands support `--json` for machine-readable output.
+Every listing and change can print JSON with `--json`, for scripts, AI tools and `jq`. A list with nothing in it prints `[]`.
 
 ```bash
-kb                                           # Launch TUI
-
-# Workspaces
-kb workspaces                                # List workspaces
-kb workspace create <name> [--kind project]  # Create workspace (kinds: project, area, resource, archive)
-kb workspace show <name>                     # Show workspace with boards and notes
-kb workspace edit <name> [--kind area]       # Update workspace
-kb workspace archive <name>                  # Archive workspace
-kb workspace delete <name>                   # Delete (must be empty)
-kb workspace board move <board> -w <ws>      # Move board to workspace
-kb workspace note move <note> -w <ws>        # Move note to workspace
-
-# Boards
-kb boards                                    # List all boards
-kb board create <name> [-d "description"]    # Create board with default columns
-kb board delete <name> [-f]                  # Delete board
-
-# Cards
-kb cards                                     # List cards on current board
-kb card add "Title" [-c column] [-p priority] [-d "desc"] [-l "a,b"] [-e EXT-1]
-kb card show <id>                            # Show card details
-kb card edit <id> [-t title] [-d desc] [-l labels] [-p priority] [-e ext-id]
-kb card move <id> <column>                   # Move card to column
-kb card archive <id>                         # Archive a card
-kb card delete <id>                          # Soft-delete a card
-
-# Columns
-kb columns                                   # List columns for current board
-kb column add <name>                         # Add column to current board
-kb column delete <name> [-f]                 # Delete column and its cards
-kb column wip-limit <name> <limit>           # Set WIP limit (0 to clear)
-kb column reorder id1,id2,...                # Reorder columns by ID
-
-# Notes (a <note> can be its title, alias, file name, slug or id)
-kb notes                                     # List notes
-kb note create <title> [--tags "design,api"] # Create note (file: "<title>.md")
-kb note show <note>                          # Show note content
-kb note edit <note> --title/--body/--tags    # Change fields
-kb note rename <note> <new title>            # Rename file, rewrite links
-kb note delete <note>                        # Delete note and its file
-kb note backlinks <note>                     # Show backlinks
-kb note search <words...>                    # Full-text search
-kb notes --tag design                        # Filter by tag
-kb open <note>                               # Edit the file in $EDITOR
-kb daily [--date YYYY-MM-DD]                 # Daily note in $KB_DAILY_DIR (default daily/)
-kb tags                                      # Tag counts
-kb index [--rebuild]                         # Rescan the vault
-
-# Graph
-kb graph                                     # Text summary of connections
-kb graph --open                              # Open HTML visualization in browser
-kb graph --workspace <name>                  # Scope to workspace
-kb graph --json                              # JSON node/edge data
-
-# Publish
-kb publish <slug> [--target name]            # Publish note as Jekyll post
-kb publish <slug> --draft                    # Publish as draft
-kb publish <slug> --dry-run                  # Preview without writing
-kb publish setup <name> --path <site> [--posts-dir _posts]  # Create publish target
-kb publish list                              # Show targets and publish log
-kb publish delete <target-name>              # Remove publish target
-```
-
-Card IDs and note slugs can be abbreviated to the first 4+ unique characters. Column and workspace names are case-insensitive.
-
-### Flags Reference
-
-| Flag | Short | Commands | Description |
-|------|-------|----------|-------------|
-| `--json` | | all | Output in JSON format |
-| `--description` | `-d` | board create, card add, card edit | Description text |
-| `--column` | `-c` | card add | Target column (default: first) |
-| `--priority` | `-p` | card add, card edit | low, medium, high, urgent |
-| `--title` | `-t` | card edit | New title |
-| `--labels` | `-l` | card add, card edit | Comma-separated labels |
-| `--external-id` | `-e` | card add, card edit | External system ID (Jira, GitHub, etc.) |
-| `--force` | `-f` | board delete, column delete | Skip confirmation prompt |
-| `--kind` | `-k` | workspace create, workspace edit | PARA kind: project, area, resource, archive |
-| `--workspace` | `-w` | workspace board move, workspace note move | Target workspace |
-| `--tag` | | note create, notes list | Comma-separated tags |
-| `--search` | | notes list | Search note titles and bodies |
-| `--target` | | publish | Publish target name |
-| `--draft` | | publish | Publish as draft |
-| `--dry-run` | | publish | Preview without writing files |
-| `--open` | | graph | Open visualization in browser |
-
-## AI Tool Integration
-
-All CLI commands support `--json` for structured output, making kb scriptable by AI tools (Claude Code, Gemini, etc.) and shell pipelines.
-
-```bash
-# List boards
 kb boards --json
-
-# Create a card with all fields
-kb card add "Fix auth bug" -p urgent -l "bug,security" -e "GH-42" --json
-
-# Pipeline example: list all urgent cards
-kb cards --json | jq '[.[] | select(.priority == "urgent")]'
-
-# Note operations
-kb note create "Sprint retro" --tag "retro,sprint-3" --json
-kb note backlinks sprint-retro --json
+kb card add "Fix auth bug" -B api -p urgent -l "bug,security" -e GH-42 --json
+kb cards -B api --json | jq '[.[] | select(.priority == "urgent")]'
+kb note backlinks "sprint retro" --json
 ```
 
-In `--json` mode, destructive commands (delete) skip interactive confirmation prompts, making them safe for non-interactive use.
+The JSON fields:
 
-## Migrating from v0.2.x
+- **note**: `id`, `title`, `slug`, `path`, `body`, `tags` (a list), `pinned`, `workspace`, `workspace_id`, `created_at`, `updated_at`
+- **board**: `id` (its vault path), `name`, `description`, `workspace`
+- **card**: `id`, `board`, `column`, `title`, `description`, `priority`, `labels` (a list), `external_id`, `archived`
+- **column**: `name`, `position`, `wip_limit`, `cards`
+- **workspace**: `id`, `name`, `kind`, `description`, `path`, `position`
 
-Notes used to live only inside the SQLite database. The first time kb 0.3 runs, it writes each of them out as a Markdown file in the vault (keeping its id, tags and dates) and from then on reads the files. Set `KB_VAULT` before that first run if you want them somewhere other than `~/notes`. Boards and cards are unchanged.
+Commands that delete ask on stderr and read the answer from stdin. With no answer (a script) they stop with an error, so a script passes `--force` (`-f`). Errors exit with status 1.
 
-## Migrating from v0.1.x
+## Upgrading from 0.3
 
-If you are upgrading from v0.1.x (kanban-only):
+kb 0.3 kept boards, cards and workspaces in a SQLite database (`~/.local/share/kb/kb.db`). kb 0.4 keeps them as files, and moves them over once:
 
-- A "Default" workspace is automatically created and all existing boards are assigned to it
-- No data is lost — boards and cards work exactly as before
-- New features (notes, workspaces, graph, publish) are opt-in
+```bash
+kb import --dry-run      # what it will do, writing nothing
+kb import
+```
 
-## Tmux Integration
+Each board becomes a file in `Boards/`, keeping the start of each card's id; archived cards go to the board's Archive, and deleted ones are dropped. Workspaces go to `.kb/workspaces.yml`, publish sites to `~/.config/kb/publish.yml` and publish history into the notes' frontmatter. Labels with spaces become tags with dashes, and the report lists each one. Everything is checked before anything is written, and running it again skips what is done. Afterwards `kb.db` is renamed `kb.db.imported-0.4` and kept. Until the import, kb asks you to run it.
 
-With [dev-session-manager](https://github.com/jeryldev/dev-session-manager), press `prefix + k` to open kb in a tmux popup. The board auto-detects from your tmux session name.
+The JSON output changed: card `labels` and note `tags` are lists, boards and cards are named by name rather than by uuid, and cards have no timestamps.
 
-## Data
+## Tmux
 
-Notes are the Markdown files in the vault: `$KB_VAULT`, default `~/notes`. Daily notes go in `$KB_DAILY_DIR` inside it, default `daily`.
+With [dev-session-manager](https://github.com/jeryldev/dev-session-manager), `prefix + k` opens kb in a tmux popup, in the window's folder, so it opens that project's board: the board named after the folder or its git repository, worktrees included. If kb cannot start, the popup stays open until you press Enter, so you can read why.
 
-Boards, cards and workspaces, plus the note index (search, links, tags), are in `~/.local/share/kb/kb.db` (SQLite; override with `$XDG_DATA_HOME`). Keep it out of a synced folder; deleting it loses no notes, though the index has to be rebuilt and boards and cards live only there.
+## Files
 
-Default columns on board creation: Backlog, Todo, In Progress, Review, Done.
+| What | Where |
+|------|-------|
+| Notes | `$KB_VAULT` (default `~/notes`), any folder |
+| Daily notes | `$KB_DAILY_DIR` in the vault (default `daily/`) |
+| Boards | any `kanban-plugin: board` file; new ones in `$KB_BOARDS_DIR` (default `Boards/`) |
+| Workspaces | `.kb/workspaces.yml` in the vault |
+| Deleted notes and boards | `.trash/` in the vault, as Obsidian does |
+| Publish sites, workspace folders | `~/.config/kb` (`$XDG_CONFIG_HOME`) |
+| Locks that keep two kb processes from clobbering a file | `~/.cache/kb/locks` (`$XDG_CACHE_HOME`) |
 
-## Known Limitations
+kb writes each file atomically, under a lock, and an edit to a note or card that changed on disk since kb read it is refused rather than overwrite the other change. A note in iCloud that is not downloaded shows by name, with a warning, and is never overwritten.
 
-- Graph visualization requires internet (D3.js loaded from CDN)
-- Publish only supports Jekyll engine currently
-- Archived workspaces remain visible in list commands (no `--active` filter yet)
+## Limitations
+
+- The HTML graph needs an internet connection (D3.js from a CDN).
+- Publishing supports Jekyll only.
+- Archived workspaces still show in lists.
 
 ## Dependencies
 
-kb is a single static binary with no runtime dependencies.
-
-**Build dependencies** (managed via `go.mod`):
-
 | Dependency | Purpose |
 |-----------|---------|
-| [modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite) | Pure-Go SQLite driver (no CGo required) |
-| [spf13/cobra](https://github.com/spf13/cobra) | CLI framework |
-| [charmbracelet/bubbletea](https://github.com/charmbracelet/bubbletea) | Terminal UI framework |
-| [charmbracelet/lipgloss](https://github.com/charmbracelet/lipgloss) | TUI styling |
-| [charmbracelet/bubbles](https://github.com/charmbracelet/bubbles) | TUI components (text input, viewport) |
-| [google/uuid](https://github.com/google/uuid) | UUID generation for entity IDs |
+| [spf13/cobra](https://github.com/spf13/cobra) | Commands and flags |
+| [charmbracelet/bubbletea](https://github.com/charmbracelet/bubbletea), [lipgloss](https://github.com/charmbracelet/lipgloss), [bubbles](https://github.com/charmbracelet/bubbles) | The TUI |
+| [yuin/goldmark](https://github.com/yuin/goldmark) | Reading boards' Markdown as the Kanban plugin does |
+| [go-yaml/yaml](https://github.com/go-yaml/yaml) | Frontmatter and settings |
+| [golang.org/x/text](https://pkg.go.dev/golang.org/x/text) | Search that ignores accents |
+| [google/uuid](https://github.com/google/uuid) | Note ids |
 
 ## License
 

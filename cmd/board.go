@@ -11,28 +11,23 @@ var boardCmd = &cobra.Command{
 	Use:     "boards",
 	Aliases: []string{"board"},
 	Short:   "Manage boards",
+	Long: `Boards are Markdown files in the Obsidian Kanban plugin's format, in the
+vault folder named by KB_BOARDS_DIR (default "Boards"). Any file with
+kanban-plugin: board in its frontmatter is a board, wherever it is.`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		boards, err := db.ListBoards()
-		if err != nil {
-			return err
+		boards := db.ListBoards()
+		if jsonOutput {
+			return jsonList(boards, toBoardJSON)
 		}
 		if len(boards) == 0 {
 			fmt.Fprintln(cmd.OutOrStdout(), "No boards found. Create one with: kb board create <name>")
 			return nil
 		}
-
-		if jsonOutput {
-			out := make([]boardJSON, len(boards))
-			for i, b := range boards {
-				out[i] = toBoardJSON(b)
-			}
-			return printJSON(out)
-		}
-
 		w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "ID\tNAME\tDESCRIPTION\tCREATED")
+		fmt.Fprintln(w, "NAME\tWORKSPACE\tFILE\tDESCRIPTION")
 		for _, b := range boards {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", b.ID[:8], b.Name, b.Description, b.CreatedAt.Format("02 Jan 2006"))
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", b.Name, workspaceName(b.WorkspaceID), b.ID, truncateStr(b.Description, 40))
 		}
 		return w.Flush()
 	},
@@ -40,90 +35,86 @@ var boardCmd = &cobra.Command{
 
 var boardCreateCmd = &cobra.Command{
 	Use:   "create <name>",
-	Short: "Create a new board with default columns",
+	Short: "Create a board with the usual columns",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		desc, _ := cmd.Flags().GetString("description")
-
 		wsName, _ := cmd.Flags().GetString("workspace")
-		workspaceID, err := resolveWorkspaceIDForCreate(wsName)
+		workspaceID, err := workspaceIDFor(wsName)
 		if err != nil {
 			return err
 		}
-
 		board, err := db.CreateBoard(args[0], desc, workspaceID)
 		if err != nil {
 			return err
 		}
-
 		if jsonOutput {
 			return printJSON(toBoardJSON(board))
 		}
-
-		fmt.Fprintf(cmd.OutOrStdout(), "Created board %q (id: %s)\n", board.Name, board.ID[:8])
+		fmt.Fprintf(cmd.OutOrStdout(), "Created board %q (%s)\n", board.Name, board.ID)
 		return nil
 	},
 }
 
 var boardDeleteCmd = &cobra.Command{
 	Use:   "delete <name>",
-	Short: "Delete a board and all its data",
+	Short: "Move a board's file to the vault's .trash folder",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		board, err := db.GetBoardByName(args[0])
+		board, err := db.GetBoard(args[0])
 		if err != nil {
 			return err
 		}
-		if board == nil {
-			return fmt.Errorf("board %q not found", args[0])
-		}
-
 		force, _ := cmd.Flags().GetBool("force")
-		if !force && !jsonOutput {
-			fmt.Fprintf(cmd.OutOrStdout(), "Delete board %q and all its cards? This cannot be undone. [y/N] ", board.Name)
-			var confirm string
-			fmt.Scanln(&confirm)
-			if confirm != "y" && confirm != "Y" {
-				fmt.Fprintln(cmd.OutOrStdout(), "Cancelled.")
-				return nil
-			}
-		}
-
-		out := toBoardJSON(board)
-		if err := db.DeleteBoard(board.ID); err != nil {
+		if err := confirm(cmd, force, fmt.Sprintf("Move board %q (%s) to the trash?", board.Name, board.ID)); err != nil {
 			return err
 		}
-
-		if jsonOutput {
-			return printJSON(out)
+		dest, err := db.TrashBoard(board.ID)
+		if err != nil {
+			return err
 		}
-
-		fmt.Fprintf(cmd.OutOrStdout(), "Deleted board %q\n", board.Name)
+		if jsonOutput {
+			return printJSON(toBoardJSON(board))
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Moved board %q to %s\n", board.Name, dest)
 		return nil
 	},
 }
 
-func resolveWorkspaceIDForCreate(wsName string) (string, error) {
-	if wsName != "" {
-		ws, err := resolveWorkspace(wsName)
+var boardMoveCmd = &cobra.Command{
+	Use:   "move <board> [--workspace <workspace>]",
+	Short: "Move a board into a workspace (without --workspace, into Default)",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		board, err := db.GetBoard(args[0])
 		if err != nil {
-			return "", err
+			return err
 		}
-		return ws.ID, nil
-	}
-	defaultWS, err := db.GetDefaultWorkspace()
-	if err != nil {
-		return "", fmt.Errorf("getting default workspace: %w", err)
-	}
-	return defaultWS.ID, nil
+		wsName, _ := cmd.Flags().GetString("workspace")
+		wsID, err := workspaceIDFor(wsName)
+		if err != nil {
+			return err
+		}
+		if err := db.SetBoardWorkspace(board.ID, wsID); err != nil {
+			return err
+		}
+		if board, err = db.GetBoard(board.ID); err != nil {
+			return err
+		}
+		if jsonOutput {
+			return printJSON(toBoardJSON(board))
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Moved board %q to workspace %q\n", board.Name, workspaceName(wsID))
+		return nil
+	},
 }
 
 func init() {
 	boardCreateCmd.Flags().StringP("description", "d", "", "Board description")
-	boardCreateCmd.Flags().StringP("workspace", "w", "", "Workspace to assign the board to (default: Default)")
+	boardCreateCmd.Flags().StringP("workspace", "w", "", "Workspace for the board (default: Default)")
 	boardDeleteCmd.Flags().BoolP("force", "f", false, "Skip confirmation")
+	boardMoveCmd.Flags().StringP("workspace", "w", "", "Workspace to move to (default: Default)")
 
-	boardCmd.AddCommand(boardCreateCmd)
-	boardCmd.AddCommand(boardDeleteCmd)
+	boardCmd.AddCommand(boardCreateCmd, boardDeleteCmd, boardMoveCmd)
 	rootCmd.AddCommand(boardCmd)
 }

@@ -22,8 +22,8 @@ func TestGenerateHTMLBasic(t *testing.T) {
 	}
 
 	checks := []struct {
-		name    string
-		substr  string
+		name   string
+		substr string
 	}{
 		{"doctype", "<!DOCTYPE html>"},
 		{"title", "<title>Test Graph</title>"},

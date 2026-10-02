@@ -1,32 +1,48 @@
 package tui
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/jeryldev/kb/internal/store"
+	"github.com/jeryldev/kb/internal/fstore"
+	"github.com/jeryldev/kb/internal/model"
 )
 
 var titleLine = regexp.MustCompile(`(?m)^title: .*\n`)
 
-func testEditApp(t *testing.T) (*App, *store.DB) {
+// testStore opens a store on an empty vault in the test's temp dir.
+func testStore(t *testing.T) *fstore.Store {
 	t.Helper()
-	db, err := store.OpenWithPath(":memory:", t.TempDir())
+	dir := t.TempDir()
+	db, err := fstore.Open(filepath.Join(dir, "vault"), fstore.Options{
+		ConfigDir: filepath.Join(dir, "config"),
+		LockDir:   filepath.Join(dir, "locks"),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
-	return &App{db: db, mode: modeNoteView, width: 80, height: 24}, db
+	return db
+}
+
+func testEditApp(t *testing.T) (*App, *fstore.Store, *model.Note) {
+	t.Helper()
+	db := testStore(t)
+	note, err := db.CreateNote("Edit Me", "", "before", db.DefaultWorkspace().ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := &App{db: db, width: 80, height: 24}
+	app.switchToWSContent(db.DefaultWorkspace())
+	app.switchToNoteView(note.ID)
+	return app, db, note
 }
 
 func TestEditOpensTheVaultFileItself(t *testing.T) {
-	app, db := testEditApp(t)
-	ws, _ := db.GetDefaultWorkspace()
-	note, _ := db.CreateNote("Edit Me", "edit-me", "body", ws.ID)
+	app, db, note := testEditApp(t)
 	t.Setenv("VISUAL", "")
 	t.Setenv("EDITOR", "nvim -u NONE")
 
@@ -41,9 +57,8 @@ func TestEditOpensTheVaultFileItself(t *testing.T) {
 }
 
 func TestAfterEditTheNoteIsReadBackFromItsFile(t *testing.T) {
-	app, db := testEditApp(t)
-	ws, _ := db.GetDefaultWorkspace()
-	note, _ := db.CreateNote("Edit Me", "edit-me", "before", ws.ID)
+	app, db, note := testEditApp(t)
+	db.CreateNote("Link", "", "", db.DefaultWorkspace().ID)
 
 	// What the editor does: rewrite the file, frontmatter and all.
 	path := filepath.Join(db.Vault().Root(), note.Path)
@@ -52,37 +67,47 @@ func TestAfterEditTheNoteIsReadBackFromItsFile(t *testing.T) {
 	edited = titleLine.ReplaceAllString(edited, "")
 	edited = strings.Replace(edited, "---\n", "---\ntitle: Edited Title\n", 1)
 	os.WriteFile(path, []byte(edited), 0o644)
-	later := time.Now().Add(2 * time.Second)
-	os.Chtimes(path, later, later)
 
-	msg := app.afterNoteEdit(note.ID)(nil)
-	got, ok := msg.(noteEditedMsg)
-	if !ok {
-		t.Fatalf("msg = %#v", msg)
+	app.Update(noteEditedMsg{noteID: note.ID})
+	got := app.noteView.note
+	if app.mode != modeNoteView || got.Body != "after, with a [[Link]]" || got.Title != "Edited Title" {
+		t.Errorf("mode %d, note %+v", app.mode, got)
 	}
-	if got.note.Body != "after, with a [[Link]]" || got.note.Title != "Edited Title" {
-		t.Errorf("note = %+v", got.note)
-	}
-	if links, _ := db.GetForwardLinks("note", note.ID); len(links) != 1 {
-		t.Errorf("links = %d", len(links))
+	link, _ := db.ResolveNoteRef("Link")
+	if bl := db.Backlinks(link.ID); len(bl) != 1 {
+		t.Errorf("backlinks to Link = %v", bl)
 	}
 }
 
-func TestAfterEditOfADeletedFileLeavesTheNote(t *testing.T) {
-	app, db := testEditApp(t)
-	ws, _ := db.GetDefaultWorkspace()
-	note, _ := db.CreateNote("Doomed", "doomed", "x", ws.ID)
+func TestAfterEditOfADeletedFileGoesBack(t *testing.T) {
+	app, db, note := testEditApp(t)
 	os.Remove(filepath.Join(db.Vault().Root(), note.Path))
 
-	if _, ok := app.afterNoteEdit(note.ID)(nil).(noteDeletedMsg); !ok {
-		t.Error("expected noteDeletedMsg")
+	app.Update(noteEditedMsg{noteID: note.ID})
+	if app.mode != modeWSContent || !strings.Contains(app.feedback, "gone") {
+		t.Errorf("mode %d, feedback %q", app.mode, app.feedback)
+	}
+}
+
+// An editor that fails leaves the note on screen with the error shown,
+// until the next key (T1).
+func TestEditorFailureStaysOnTheNoteWithTheError(t *testing.T) {
+	app, _, note := testEditApp(t)
+	app.Update(noteEditedMsg{noteID: note.ID, err: errors.New("exit status 1")})
+	if app.mode != modeNoteView || app.err == nil {
+		t.Fatalf("mode %d, err %v", app.mode, app.err)
+	}
+	if view := app.View(); !strings.Contains(view, "exit status 1") || !strings.Contains(view, "before") {
+		t.Errorf("the error and the note should both show:\n%s", view)
+	}
+	app.Update(key("j"))
+	if app.err != nil {
+		t.Error("the error should clear on the next key")
 	}
 }
 
 func TestEditingLeavesNoTempFiles(t *testing.T) {
-	app, db := testEditApp(t)
-	ws, _ := db.GetDefaultWorkspace()
-	note, _ := db.CreateNote("Clean", "clean", "x", ws.ID)
+	app, _, note := testEditApp(t)
 	before, _ := filepath.Glob(filepath.Join(os.TempDir(), "kb-note-*"))
 	t.Setenv("EDITOR", "true")
 	if _, err := app.noteEditorCommand(note); err != nil {
@@ -96,23 +121,36 @@ func TestEditingLeavesNoTempFiles(t *testing.T) {
 
 // A board opened automatically at start-up (KB_BOARD, the tmux session or
 // the folder name) must not reopen every time the picker loads, or "b"
-// can never leave it.
+// can never leave it. "b" goes to the board's workspace.
 func TestStartupBoardOpensOnlyOnce(t *testing.T) {
-	db, err := store.OpenWithPath(":memory:", t.TempDir())
+	db := testStore(t)
+	ws, err := db.CreateWorkspace("Work", model.KindProject, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
-	ws, _ := db.GetDefaultWorkspace()
 	if _, err := db.CreateBoard("auto", "", ws.ID); err != nil {
 		t.Fatal(err)
 	}
 	app := NewApp(db, "auto")
-
-	if _, ok := app.initPicker()().(boardCreatedMsg); !ok {
-		t.Fatal("the start-up board should open first")
+	app.Init()
+	if app.mode != modeBoard || app.board.board.Name != "auto" {
+		t.Fatalf("the start-up board should open first; mode %d", app.mode)
 	}
-	if msg, ok := app.initPicker()().(workspacesLoadedMsg); !ok {
-		t.Errorf("going back reopened the board instead of the picker: %#v", msg)
+	app.Update(key("b"))
+	if app.mode != modeWSContent || app.wsContent.workspace.Name != "Work" {
+		t.Fatalf("b should go to the board's workspace; mode %d", app.mode)
+	}
+	app.Update(key("b"))
+	if app.mode != modePicker {
+		t.Errorf("going back reopened something other than the picker: mode %d", app.mode)
+	}
+}
+
+func TestAMissingStartupBoardShowsThePicker(t *testing.T) {
+	db := testStore(t)
+	app := NewApp(db, "no-such-board")
+	app.Init()
+	if app.mode != modePicker || app.err != nil {
+		t.Errorf("mode %d, err %v", app.mode, app.err)
 	}
 }

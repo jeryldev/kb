@@ -24,15 +24,3 @@ func TestValidateBoardName(t *testing.T) {
 		t.Errorf("100-char name returned error: %v", err)
 	}
 }
-
-func TestDefaultColumns(t *testing.T) {
-	expected := []string{"Backlog", "Todo", "In Progress", "Review", "Done"}
-	if len(DefaultColumns) != len(expected) {
-		t.Fatalf("DefaultColumns has %d items, want %d", len(DefaultColumns), len(expected))
-	}
-	for i, col := range expected {
-		if DefaultColumns[i] != col {
-			t.Errorf("DefaultColumns[%d] = %q, want %q", i, DefaultColumns[i], col)
-		}
-	}
-}

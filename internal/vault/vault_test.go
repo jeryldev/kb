@@ -1,9 +1,11 @@
 package vault
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
+	"syscall"
 	"testing"
 )
 
@@ -144,5 +146,53 @@ func TestWriteKeepsModeAndFollowsSymlinks(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(filepath.Join(dir, "real", "target.md")); string(data) != "new" {
 		t.Errorf("target = %q", data)
+	}
+}
+
+func TestWalkSeesThroughSymlinkedNotes(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(t.TempDir(), "elsewhere.md")
+	os.WriteFile(target, []byte("v1"), 0o644)
+	os.Symlink(target, filepath.Join(dir, "link.md"))
+	os.WriteFile(target, []byte("version two, longer"), 0o644)
+
+	var got Entry
+	New(dir).Walk(func(e Entry) error { got = e; return nil })
+	if got.Size != int64(len("version two, longer")) {
+		t.Errorf("walk reported the link's size %d, not its target's", got.Size)
+	}
+}
+
+func TestRegularFilesAreNotDataless(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "here.md", "x")
+	New(dir).Walk(func(e Entry) error {
+		if e.Dataless {
+			t.Errorf("%s reported as evicted", e.Path)
+		}
+		return nil
+	})
+}
+
+// On a filesystem without hard links (exFAT, network shares) Create still
+// works, and still never replaces a file (A6).
+func TestCreateWorksWithoutHardLinks(t *testing.T) {
+	link = func(string, string) error { return syscall.ENOTSUP }
+	t.Cleanup(func() { link = os.Link })
+	dir := t.TempDir()
+	v := New(dir)
+	if _, err := v.Create("a.md", &Doc{Body: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Create("a.md", &Doc{Body: "second"}); !errors.Is(err, ErrExists) {
+		t.Errorf("err = %v, want ErrExists", err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "a.md"))
+	if string(data) != "first" {
+		t.Errorf("file = %q", data)
+	}
+	leftovers, _ := filepath.Glob(filepath.Join(dir, ".kb-*.tmp"))
+	if len(leftovers) != 0 {
+		t.Errorf("temp files left: %v", leftovers)
 	}
 }

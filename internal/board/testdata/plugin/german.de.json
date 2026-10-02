@@ -1,0 +1,44 @@
+{
+  "frontmatter": {
+    "kanban-plugin": "board"
+  },
+  "settings": {
+    "kanban-plugin": "board"
+  },
+  "lanes": [
+    {
+      "title": "Offen",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "Karte",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": []
+        }
+      ]
+    },
+    {
+      "title": "Erledigt",
+      "maxItems": 0,
+      "complete": true,
+      "items": [
+        {
+          "titleRaw": "Fertig",
+          "checkChar": "x",
+          "blockId": null,
+          "tags": []
+        }
+      ]
+    }
+  ],
+  "archive": [
+    {
+      "titleRaw": "Alt",
+      "checkChar": " ",
+      "blockId": null,
+      "tags": []
+    }
+  ]
+}

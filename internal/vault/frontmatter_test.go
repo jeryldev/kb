@@ -49,7 +49,7 @@ Body here
 	if !doc.Pinned() || doc.Workspace() != "school" {
 		t.Errorf("pinned/workspace = %v %q", doc.Pinned(), doc.Workspace())
 	}
-	if c := doc.Created(); c == nil || !c.Equal(time.Date(2026, 5, 13, 0, 0, 0, 0, time.UTC)) {
+	if c := doc.Created(); c == nil || !c.Equal(time.Date(2026, 5, 13, 0, 0, 0, 0, time.Local)) {
 		t.Errorf("created = %v", c)
 	}
 	if a := doc.Archived(); a == nil || a.Hour() != 10 {
@@ -141,5 +141,71 @@ func TestParseCRLF(t *testing.T) {
 	}
 	if doc.Title() != "Win" || doc.Body != "body\r\n" {
 		t.Errorf("title=%q body=%q", doc.Title(), doc.Body)
+	}
+}
+
+func TestZonelessTimesAreLocal(t *testing.T) {
+	orig := time.Local
+	time.Local = time.FixedZone("PDT", -7*3600)
+	t.Cleanup(func() { time.Local = orig })
+	doc, _ := Parse([]byte("---\ncreated: 2026-10-02\n---\n"))
+	c := doc.Created()
+	if c == nil || c.In(time.Local).Format("2006-01-02") != "2026-10-02" {
+		t.Errorf("created = %v, want 2 Oct in local time", c)
+	}
+	doc, _ = Parse([]byte("---\ncreated: 2026-10-02T23:30:00Z\n---\n"))
+	if c := doc.Created(); c == nil || !c.Equal(time.Date(2026, 10, 2, 23, 30, 0, 0, time.UTC)) {
+		t.Errorf("an explicit zone must be kept: %v", c)
+	}
+}
+
+func TestAScalarAliasIsOneAlias(t *testing.T) {
+	doc, _ := Parse([]byte("---\naliases: Project Phoenix\ntags: a b\n---\n"))
+	if got := strings.Join(doc.Aliases(), "|"); got != "Project Phoenix" {
+		t.Errorf("aliases = %q", got)
+	}
+	doc, _ = Parse([]byte("---\naliases: Phoenix, PX\n---\n"))
+	if got := strings.Join(doc.Aliases(), "|"); got != "Phoenix|PX" {
+		t.Errorf("aliases = %q", got)
+	}
+	if got := strings.Join(doc.Tags(), "|"); got != "" {
+		_ = got
+	}
+}
+
+func TestNullValuesAreEmpty(t *testing.T) {
+	doc, _ := Parse([]byte("---\nid: ~\ntitle: null\n---\n"))
+	if doc.ID() != "" || doc.Title() != "" {
+		t.Errorf("id=%q title=%q", doc.ID(), doc.Title())
+	}
+}
+
+func TestArchivedTrueCountsAsArchived(t *testing.T) {
+	doc, _ := Parse([]byte("---\narchived: true\n---\n"))
+	if doc.Archived() == nil {
+		t.Error("archived: true not seen")
+	}
+	doc, _ = Parse([]byte("---\narchived: false\n---\n"))
+	if doc.Archived() != nil {
+		t.Error("archived: false read as archived")
+	}
+}
+
+func TestAByteOrderMarkDoesNotHideFrontmatter(t *testing.T) {
+	doc, err := Parse([]byte("\ufeff---\ntitle: BOM\n---\nbody"))
+	if err != nil || doc.Title() != "BOM" || doc.Body != "body" {
+		t.Errorf("title=%q body=%q err=%v", doc.Title(), doc.Body, err)
+	}
+}
+
+func TestCommentsSurviveARewrittenValue(t *testing.T) {
+	doc, _ := Parse([]byte("---\ntitle: Old # keep me\n# about tags\ntags: [a]\n---\n"))
+	doc.SetTitle("New")
+	doc.SetTags([]string{"b"})
+	out := string(doc.Render())
+	for _, want := range []string{"title: New # keep me", "# about tags"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("lost %q:\n%s", want, out)
+		}
 	}
 }

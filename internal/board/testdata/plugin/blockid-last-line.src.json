@@ -1,0 +1,24 @@
+{
+  "frontmatter": {
+    "kanban-plugin": "board"
+  },
+  "settings": {
+    "kanban-plugin": "board"
+  },
+  "lanes": [
+    {
+      "title": "Todo",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "Multi line card\nwith its id on the last line",
+          "checkChar": " ",
+          "blockId": "last0001",
+          "tags": []
+        }
+      ]
+    }
+  ],
+  "archive": []
+}

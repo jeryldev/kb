@@ -1,0 +1,37 @@
+{
+  "frontmatter": {
+    "kanban-plugin": "board"
+  },
+  "settings": {
+    "kanban-plugin": "board"
+  },
+  "lanes": [
+    {
+      "title": "Todo",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "Not archived",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": []
+        }
+      ]
+    },
+    {
+      "title": "Archive",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "a lane named Archive without a break",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": []
+        }
+      ]
+    }
+  ],
+  "archive": []
+}

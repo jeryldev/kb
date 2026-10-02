@@ -3,6 +3,7 @@ package publish
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -18,26 +19,50 @@ func JekyllFileName(slug string, date time.Time) string {
 	return fmt.Sprintf("%s-%s.md", date.Format("2006-01-02"), slug)
 }
 
+// DefaultPermalink is the permalink pattern of a target that sets none.
+const DefaultPermalink = "/blog/:year/:month/:day/:title/"
+
 func JekyllPermalink(slug string, date time.Time) string {
-	return fmt.Sprintf("/blog/%s/%s/", date.Format("2006/01/02"), slug)
+	return ExpandPermalink(DefaultPermalink, slug, date)
+}
+
+// ExpandPermalink fills in a Jekyll permalink pattern's :year, :month,
+// :day and :title for a post.
+func ExpandPermalink(pattern, slug string, date time.Time) string {
+	if pattern == "" {
+		pattern = DefaultPermalink
+	}
+	return strings.NewReplacer(
+		":year", date.Format("2006"),
+		":month", date.Format("01"),
+		":day", date.Format("02"),
+		":title", slug,
+	).Replace(pattern)
 }
 
 func GenerateFrontMatter(note *model.Note, date time.Time, draft bool) string {
 	var b strings.Builder
 	b.WriteString("---\n")
 	b.WriteString("layout: post\n")
-	fmt.Fprintf(&b, "title: %q\n", note.Title)
+	fmt.Fprintf(&b, "title: %s\n", yamlQuote(note.Title))
 	fmt.Fprintf(&b, "date: %s\n", date.Format("2006-01-02"))
 
 	if note.Tags != "" {
-		tags := note.TagList()
+		var tags []string
+		for _, t := range note.TagList() {
+			if plainTag.MatchString(t) {
+				tags = append(tags, t)
+			} else {
+				tags = append(tags, yamlQuote(t))
+			}
+		}
 		fmt.Fprintf(&b, "tags: [%s]\n", strings.Join(tags, ", "))
 	}
 
 	// Front matter is plain text, so links become their words.
 	excerpt := extractExcerpt(ResolveWikilinks(note.Body, nil, nil))
 	if excerpt != "" {
-		fmt.Fprintf(&b, "excerpt: %q\n", excerpt)
+		fmt.Fprintf(&b, "excerpt: %s\n", yamlQuote(excerpt))
 	}
 
 	if draft {
@@ -91,14 +116,20 @@ func ResolveWikilinks(body string, permalinks map[string]string, resolver NoteRe
 	})
 }
 
-// PermalinkFromPostPath is the URL of the post written at path, read from
-// its YYYY-MM-DD-slug.md file name, so links follow where a post really is.
+// PermalinkFromPostPath is the URL of the post written at path, with the
+// default permalink pattern.
 func PermalinkFromPostPath(path string) (string, bool) {
+	return PermalinkFor("", path)
+}
+
+// PermalinkFor is the URL of the post written at path, read from its
+// YYYY-MM-DD-slug.md file name, so links follow where a post really is.
+func PermalinkFor(pattern, path string) (string, bool) {
 	date, slug, ok := splitPostName(path)
 	if !ok {
 		return "", false
 	}
-	return JekyllPermalink(slug, date), true
+	return ExpandPermalink(pattern, slug, date), true
 }
 
 // PostDateFromPath is the date in a post's YYYY-MM-DD-slug.md file name.
@@ -138,10 +169,43 @@ func extractExcerpt(body string) string {
 		if strings.HasPrefix(line, "#") || strings.HasPrefix(line, "```") || strings.HasPrefix(line, "---") {
 			continue
 		}
-		if len(line) > 200 {
-			line = line[:200] + "..."
+		if runes := []rune(line); len(runes) > 200 {
+			line = string(runes[:200]) + "..."
 		}
 		return line
 	}
 	return ""
+}
+
+// plainTag is a tag YAML reads as itself without quotes in a flow list.
+var plainTag = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N}_/.-]*$`)
+
+// yamlQuote writes s as a YAML double-quoted scalar. Go's %q is close but
+// not the same: YAML has no \x00-style escapes past \xFF and reads \a
+// and others differently, so only what YAML defines is escaped.
+func yamlQuote(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"':
+			b.WriteString(`\"`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\r':
+			b.WriteString(`\r`)
+		default:
+			if r < 0x20 || r == 0x7f {
+				fmt.Fprintf(&b, `\x%02x`, r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }

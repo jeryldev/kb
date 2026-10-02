@@ -1,0 +1,36 @@
+{
+  "frontmatter": {
+    "kanban-plugin": "board"
+  },
+  "settings": {
+    "kanban-plugin": "board"
+  },
+  "lanes": [
+    {
+      "title": "Todo",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "One\nlazy line belongs to one\n\nsecond paragraph of one",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": []
+        },
+        {
+          "titleRaw": "Two",
+          "checkChar": " ",
+          "blockId": "two00001",
+          "tags": []
+        }
+      ]
+    },
+    {
+      "title": "Done",
+      "maxItems": 0,
+      "complete": false,
+      "items": []
+    }
+  ],
+  "archive": []
+}

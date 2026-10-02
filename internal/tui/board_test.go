@@ -5,41 +5,43 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/jeryldev/kb/internal/fstore"
 	"github.com/jeryldev/kb/internal/model"
 )
 
-func testApp(columns []*model.Column, cards map[string][]*model.Card) *App {
+func testApp(lanes []fstore.Lane, cards map[string][]*model.Card) *App {
 	return &App{
+		mode: modeBoard,
 		board: boardModel{
-			board:   &model.Board{ID: "board-1", Name: "Test"},
-			columns: columns,
-			cards:   cards,
+			board: &model.Board{ID: "board-1", Name: "Test"},
+			lanes: lanes,
+			cards: cards,
 		},
 		width:  120,
 		height: 40,
 	}
 }
 
-func testColumns() []*model.Column {
-	return []*model.Column{
-		{ID: "col-1", Name: "Backlog", Position: 0},
-		{ID: "col-2", Name: "Todo", Position: 1},
-		{ID: "col-3", Name: "Done", Position: 2},
+func testColumns() []fstore.Lane {
+	return []fstore.Lane{
+		{Name: "Backlog", Position: 0},
+		{Name: "Todo", Position: 1},
+		{Name: "Done", Position: 2},
 	}
 }
 
 func testCards() map[string][]*model.Card {
 	return map[string][]*model.Card{
-		"col-1": {
-			{ID: "c1", ColumnID: "col-1", Title: "Card 1", Priority: model.PriorityMedium, Position: 0},
-			{ID: "c2", ColumnID: "col-1", Title: "Card 2", Priority: model.PriorityHigh, Position: 1},
-			{ID: "c3", ColumnID: "col-1", Title: "Card 3", Priority: model.PriorityLow, Position: 2},
+		"Backlog": {
+			{ID: "c1", ColumnID: "Backlog", Title: "Card 1", Priority: model.PriorityMedium, Position: 0},
+			{ID: "c2", ColumnID: "Backlog", Title: "Card 2", Priority: model.PriorityHigh, Position: 1},
+			{ID: "c3", ColumnID: "Backlog", Title: "Card 3", Priority: model.PriorityLow, Position: 2},
 		},
-		"col-2": {
-			{ID: "c4", ColumnID: "col-2", Title: "Card 4", Priority: model.PriorityUrgent, Position: 0},
-			{ID: "c5", ColumnID: "col-2", Title: "Card 5", Priority: model.PriorityMedium, Position: 1},
+		"Todo": {
+			{ID: "c4", ColumnID: "Todo", Title: "Card 4", Priority: model.PriorityUrgent, Position: 0},
+			{ID: "c5", ColumnID: "Todo", Title: "Card 5", Priority: model.PriorityMedium, Position: 1},
 		},
-		"col-3": {},
+		"Done": {},
 	}
 }
 
@@ -259,7 +261,7 @@ func TestCardsForDisplayCrossColumn(t *testing.T) {
 
 	app.startMoveMode(1, 0)
 
-	originCards := app.cardsForDisplay("col-1")
+	originCards := app.cardsForDisplay("Backlog")
 	if len(originCards) != 2 {
 		t.Fatalf("origin column should have 2 cards (card removed), got %d", len(originCards))
 	}
@@ -269,7 +271,7 @@ func TestCardsForDisplayCrossColumn(t *testing.T) {
 		}
 	}
 
-	targetCards := app.cardsForDisplay("col-2")
+	targetCards := app.cardsForDisplay("Todo")
 	if len(targetCards) != 3 {
 		t.Fatalf("target column should have 3 cards (card inserted), got %d", len(targetCards))
 	}
@@ -285,7 +287,7 @@ func TestCardsForDisplaySameColumn(t *testing.T) {
 
 	app.startMoveMode(0, 1)
 
-	cards := app.cardsForDisplay("col-1")
+	cards := app.cardsForDisplay("Backlog")
 	if len(cards) != 3 {
 		t.Fatalf("same column should still have 3 cards, got %d", len(cards))
 	}
@@ -303,7 +305,7 @@ func TestCardsForDisplaySameColumn(t *testing.T) {
 func TestCardsForDisplayNotMoving(t *testing.T) {
 	app := testApp(testColumns(), testCards())
 
-	cards := app.cardsForDisplay("col-1")
+	cards := app.cardsForDisplay("Backlog")
 	if len(cards) != 3 {
 		t.Fatalf("expected 3 cards, got %d", len(cards))
 	}
@@ -319,7 +321,7 @@ func TestCardsForDisplayUnrelatedColumn(t *testing.T) {
 
 	app.startMoveMode(1, 0)
 
-	cards := app.cardsForDisplay("col-3")
+	cards := app.cardsForDisplay("Done")
 	if len(cards) != 0 {
 		t.Fatalf("unrelated column should be unchanged, got %d cards", len(cards))
 	}
@@ -333,7 +335,7 @@ func TestCardsForDisplayMoveToEmptyColumn(t *testing.T) {
 	app.startMoveMode(1, 0)
 	app.updateBoardMoving(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 
-	cards := app.cardsForDisplay("col-3")
+	cards := app.cardsForDisplay("Done")
 	if len(cards) != 1 {
 		t.Fatalf("empty target column should have 1 card, got %d", len(cards))
 	}
@@ -510,8 +512,7 @@ func TestBoardConfirmCancelDuringMoveAlsoCancelsMove(t *testing.T) {
 func TestCardViewArchiveConfirm(t *testing.T) {
 	app := testApp(testColumns(), testCards())
 	app.cardView = cardViewModel{
-		card:    testCards()["col-1"][0],
-		colName: "Backlog",
+		card: testCards()["Backlog"][0],
 	}
 
 	app.updateCardView(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
@@ -524,8 +525,7 @@ func TestCardViewArchiveConfirm(t *testing.T) {
 func TestCardViewDeleteConfirm(t *testing.T) {
 	app := testApp(testColumns(), testCards())
 	app.cardView = cardViewModel{
-		card:    testCards()["col-1"][0],
-		colName: "Backlog",
+		card: testCards()["Backlog"][0],
 	}
 
 	app.updateCardView(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
@@ -538,12 +538,11 @@ func TestCardViewDeleteConfirm(t *testing.T) {
 func TestCardViewConfirmCancel(t *testing.T) {
 	app := testApp(testColumns(), testCards())
 	app.cardView = cardViewModel{
-		card:       testCards()["col-1"][0],
-		colName:    "Backlog",
+		card:       testCards()["Backlog"][0],
 		confirming: "archive",
 	}
 
-	app.updateCardViewConfirming(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	app.updateCardView(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 
 	if app.cardView.confirming != "" {
 		t.Error("non-y key should cancel confirming")
@@ -554,8 +553,7 @@ func TestCardViewEscReturnsToBoard(t *testing.T) {
 	app := testApp(testColumns(), testCards())
 	app.mode = modeCardView
 	app.cardView = cardViewModel{
-		card:    testCards()["col-1"][0],
-		colName: "Backlog",
+		card: testCards()["Backlog"][0],
 	}
 
 	app.updateCardView(tea.KeyMsg{Type: tea.KeyEscape})
@@ -566,48 +564,6 @@ func TestCardViewEscReturnsToBoard(t *testing.T) {
 }
 
 // --- Picker tests (workspace-first) ---
-
-func TestPickerAutoSelectTrue(t *testing.T) {
-	app := &App{width: 80, height: 40}
-	app.picker.autoSelect = true
-
-	workspaces := []*model.Workspace{{ID: "ws1", Name: "Default", Kind: model.KindArea}}
-	app.updatePicker(workspacesLoadedMsg{workspaces: workspaces})
-
-	if app.mode != modeWSContent {
-		t.Errorf("autoSelect=true with 1 workspace should switch to wsContent mode, got mode=%d", app.mode)
-	}
-}
-
-func TestPickerAutoSelectFalse(t *testing.T) {
-	app := &App{width: 80, height: 40}
-	app.picker.autoSelect = false
-
-	workspaces := []*model.Workspace{{ID: "ws1", Name: "Default", Kind: model.KindArea}}
-	app.updatePicker(workspacesLoadedMsg{workspaces: workspaces})
-
-	if app.mode == modeWSContent {
-		t.Error("autoSelect=false with 1 workspace should stay in picker")
-	}
-	if len(app.picker.workspaces) != 1 {
-		t.Errorf("workspaces not loaded: got %d, want 1", len(app.picker.workspaces))
-	}
-}
-
-func TestPickerCursorClampAfterReload(t *testing.T) {
-	app := &App{width: 80, height: 40}
-	app.picker.cursor = 2
-
-	workspaces := []*model.Workspace{
-		{ID: "ws1", Name: "Default", Kind: model.KindArea},
-		{ID: "ws2", Name: "My Project", Kind: model.KindProject},
-	}
-	app.updatePicker(workspacesLoadedMsg{workspaces: workspaces})
-
-	if app.picker.cursor >= len(app.picker.workspaces) {
-		t.Errorf("cursor = %d, should be clamped to < %d", app.picker.cursor, len(app.picker.workspaces))
-	}
-}
 
 func TestPickerNavigation(t *testing.T) {
 	app := &App{width: 80, height: 40}
@@ -640,43 +596,17 @@ func TestPickerNavigation(t *testing.T) {
 }
 
 func TestPickerSelectWorkspace(t *testing.T) {
-	app := &App{width: 80, height: 40}
-	app.picker.workspaces = []*model.Workspace{
-		{ID: "ws1", Name: "Default", Kind: model.KindArea},
-		{ID: "ws2", Name: "My Project", Kind: model.KindProject},
-	}
-	app.picker.cursor = 1
-
-	app.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
-
+	db := testStore(t)
+	db.CreateWorkspace("My Project", model.KindProject, "", "")
+	app := NewApp(db, "")
+	app.Init()
+	app.Update(key("j"))
+	app.Update(key("enter"))
 	if app.mode != modeWSContent {
 		t.Errorf("mode = %d, want modeWSContent (%d)", app.mode, modeWSContent)
 	}
-	if app.wsContent.workspace.ID != "ws2" {
-		t.Errorf("wsContent.workspace.ID = %q, want %q", app.wsContent.workspace.ID, "ws2")
-	}
-}
-
-func TestBoardFocusCardClampAfterReload(t *testing.T) {
-	app := testApp(testColumns(), testCards())
-	app.board.focusCol = 0
-	app.board.focusCard = 2 // last card in col-1
-
-	// Simulate board reload with fewer cards (one was deleted)
-	app.updateBoard(boardLoadedMsg{
-		columns: testColumns(),
-		cards: map[string][]*model.Card{
-			"col-1": {
-				{ID: "c1", ColumnID: "col-1", Title: "Card 1", Priority: model.PriorityMedium, Position: 0},
-				{ID: "c2", ColumnID: "col-1", Title: "Card 2", Priority: model.PriorityHigh, Position: 1},
-			},
-			"col-2": testCards()["col-2"],
-			"col-3": {},
-		},
-	})
-
-	if app.board.focusCard >= 2 {
-		t.Errorf("focusCard = %d, should be clamped to < 2 after card deletion", app.board.focusCard)
+	if app.wsContent.workspace.Name != "My Project" {
+		t.Errorf("workspace = %q, want My Project", app.wsContent.workspace.Name)
 	}
 }
 
@@ -694,49 +624,6 @@ func TestTruncateEdgeCases(t *testing.T) {
 	}
 	if got := truncate("Hello World", 5); got != "Hell…" {
 		t.Errorf("truncate long = %q, want %q", got, "Hell…")
-	}
-}
-
-// --- Feedback tests ---
-
-func TestFeedbackSetOnCardMoved(t *testing.T) {
-	app := testApp(testColumns(), testCards())
-
-	app.updateBoard(cardMovedMsg{})
-
-	if app.board.feedback != "Card moved" {
-		t.Errorf("feedback = %q, want %q", app.board.feedback, "Card moved")
-	}
-}
-
-func TestFeedbackSetOnCardArchived(t *testing.T) {
-	app := testApp(testColumns(), testCards())
-
-	app.updateBoard(cardArchivedMsg{})
-
-	if app.board.feedback != "Card archived" {
-		t.Errorf("feedback = %q, want %q", app.board.feedback, "Card archived")
-	}
-}
-
-func TestFeedbackSetOnCardDeleted(t *testing.T) {
-	app := testApp(testColumns(), testCards())
-
-	app.updateBoard(cardDeletedMsg{})
-
-	if app.board.feedback != "Card deleted" {
-		t.Errorf("feedback = %q, want %q", app.board.feedback, "Card deleted")
-	}
-}
-
-func TestFeedbackClearedOnKeypress(t *testing.T) {
-	app := testApp(testColumns(), testCards())
-	app.board.feedback = "Card moved"
-
-	app.updateBoard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-
-	if app.board.feedback != "" {
-		t.Errorf("feedback = %q, want empty after keypress", app.board.feedback)
 	}
 }
 
@@ -801,14 +688,14 @@ func TestRelativeTime(t *testing.T) {
 
 func testCardsWithDescriptions() map[string][]*model.Card {
 	return map[string][]*model.Card{
-		"col-1": {
-			{ID: "c1", ColumnID: "col-1", Title: "Auth login fix", Description: "Fix OAuth flow", Priority: model.PriorityHigh, Labels: "bug,backend", Position: 0},
-			{ID: "c2", ColumnID: "col-1", Title: "Dashboard update", Description: "Add auth token display", Priority: model.PriorityMedium, Labels: "frontend", Position: 1},
+		"Backlog": {
+			{ID: "c1", ColumnID: "Backlog", Title: "Auth login fix", Description: "Fix OAuth flow", Priority: model.PriorityHigh, Labels: "bug,backend", Position: 0},
+			{ID: "c2", ColumnID: "Backlog", Title: "Dashboard update", Description: "Add auth token display", Priority: model.PriorityMedium, Labels: "frontend", Position: 1},
 		},
-		"col-2": {
-			{ID: "c3", ColumnID: "col-2", Title: "Write tests", Description: "", Priority: model.PriorityLow, Position: 0},
+		"Todo": {
+			{ID: "c3", ColumnID: "Todo", Title: "Write tests", Description: "", Priority: model.PriorityLow, Position: 0},
 		},
-		"col-3": {},
+		"Done": {},
 	}
 }
 
@@ -816,7 +703,7 @@ func TestFilteredCardsMatchesDescription(t *testing.T) {
 	app := testApp(testColumns(), testCardsWithDescriptions())
 	app.board.filter = "OAuth"
 
-	cards := app.filteredCards("col-1")
+	cards := app.filteredCards("Backlog")
 	if len(cards) != 1 {
 		t.Fatalf("expected 1 card matching description 'OAuth', got %d", len(cards))
 	}
@@ -829,7 +716,7 @@ func TestFilteredCardsMatchesTitle(t *testing.T) {
 	app := testApp(testColumns(), testCardsWithDescriptions())
 	app.board.filter = "Dashboard"
 
-	cards := app.filteredCards("col-1")
+	cards := app.filteredCards("Backlog")
 	if len(cards) != 1 {
 		t.Fatalf("expected 1 card matching title 'Dashboard', got %d", len(cards))
 	}
@@ -840,11 +727,11 @@ func TestFilteredCardsMatchesTitle(t *testing.T) {
 
 func TestFilteredCardsMatchesPriority(t *testing.T) {
 	app := testApp(testColumns(), testCardsWithDescriptions())
-	app.board.filter = "high"
+	app.togglePriorityFilter(model.PriorityHigh)
 
-	cards := app.filteredCards("col-1")
+	cards := app.filteredCards("Backlog")
 	if len(cards) != 1 {
-		t.Fatalf("expected 1 card matching priority 'high', got %d", len(cards))
+		t.Fatalf("expected 1 card with priority 'high', got %d", len(cards))
 	}
 	if cards[0].ID != "c1" {
 		t.Errorf("expected c1, got %q", cards[0].ID)
@@ -855,7 +742,7 @@ func TestFilteredCardsMatchesLabel(t *testing.T) {
 	app := testApp(testColumns(), testCardsWithDescriptions())
 	app.board.filter = "bug"
 
-	cards := app.filteredCards("col-1")
+	cards := app.filteredCards("Backlog")
 	if len(cards) != 1 {
 		t.Fatalf("expected 1 card matching label 'bug', got %d", len(cards))
 	}
@@ -868,7 +755,7 @@ func TestFilteredCardsNoMatch(t *testing.T) {
 	app := testApp(testColumns(), testCardsWithDescriptions())
 	app.board.filter = "nonexistent"
 
-	cards := app.filteredCards("col-1")
+	cards := app.filteredCards("Backlog")
 	if len(cards) != 0 {
 		t.Fatalf("expected 0 cards, got %d", len(cards))
 	}
@@ -878,7 +765,7 @@ func TestFilteredCardsEmptyFilter(t *testing.T) {
 	app := testApp(testColumns(), testCardsWithDescriptions())
 	app.board.filter = ""
 
-	cards := app.filteredCards("col-1")
+	cards := app.filteredCards("Backlog")
 	if len(cards) != 2 {
 		t.Fatalf("expected all 2 cards with empty filter, got %d", len(cards))
 	}
@@ -911,7 +798,7 @@ func TestFilteredCardsSearchAcrossDescriptionAndTitle(t *testing.T) {
 	app := testApp(testColumns(), testCardsWithDescriptions())
 	app.board.filter = "auth"
 
-	cards := app.filteredCards("col-1")
+	cards := app.filteredCards("Backlog")
 	if len(cards) != 2 {
 		t.Fatalf("expected 2 cards matching 'auth' (title c1 + description c2), got %d", len(cards))
 	}
@@ -938,4 +825,63 @@ func TestFilterKeepsTheSelectedCard(t *testing.T) {
 	if got := app.selectedCard(); got == nil || got.ID != "c2" {
 		t.Errorf("when the selected card is filtered out, the first match is selected; got %v", got)
 	}
+}
+
+// The priority keys pick cards by priority, not by text: "low" must not
+// pick a card that says "slow" (T7).
+func TestPriorityFilterIsExact(t *testing.T) {
+	app := testApp(testColumns(), map[string][]*model.Card{
+		"Backlog": {
+			{ID: "c1", ColumnID: "Backlog", Title: "Slow query", Priority: model.PriorityMedium},
+			{ID: "c2", ColumnID: "Backlog", Title: "Tidy up", Priority: model.PriorityLow},
+			{ID: "c3", ColumnID: "Backlog", Title: "Highlight syntax"},
+		},
+	})
+	app.Update(key("4"))
+	if got := app.filteredCards("Backlog"); len(got) != 1 || got[0].ID != "c2" {
+		t.Errorf("priority low shows %v, want only c2", ids(got))
+	}
+	app.Update(key("2"))
+	if got := app.filteredCards("Backlog"); len(got) != 0 {
+		t.Errorf("priority high shows %v, want none", ids(got))
+	}
+	app.Update(key("2"))
+	if got := app.filteredCards("Backlog"); len(got) != 3 {
+		t.Errorf("pressing 2 again should clear it, shows %v", ids(got))
+	}
+}
+
+// "/" starts from the filter in use, and Esc while typing keeps it (T14).
+func TestFilterInputStartsFromTheFilterAndEscKeepsIt(t *testing.T) {
+	app := testApp(testColumns(), testCards())
+	app.board.filter = "card 1"
+	app.Update(key("/"))
+	if app.board.filterInput != "card 1" {
+		t.Errorf("filter input = %q, want the current filter", app.board.filterInput)
+	}
+	app.Update(key("x"))
+	app.Update(tea.KeyMsg{Type: tea.KeyEscape})
+	if app.board.filtering || app.board.filter != "card 1" {
+		t.Errorf("after Esc: filtering %v, filter %q", app.board.filtering, app.board.filter)
+	}
+}
+
+func key(s string) tea.KeyMsg {
+	switch s {
+	case "enter":
+		return tea.KeyMsg{Type: tea.KeyEnter}
+	case "esc":
+		return tea.KeyMsg{Type: tea.KeyEscape}
+	case "tab":
+		return tea.KeyMsg{Type: tea.KeyTab}
+	}
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+}
+
+func ids(cards []*model.Card) []string {
+	var out []string
+	for _, c := range cards {
+		out = append(out, c.ID)
+	}
+	return out
 }

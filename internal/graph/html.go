@@ -3,6 +3,7 @@ package graph
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"strings"
 )
 
@@ -23,7 +24,7 @@ func GenerateHTML(data *GraphData, title string) (string, error) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>`)
-	b.WriteString(title)
+	b.WriteString(html.EscapeString(title))
 	b.WriteString(`</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }

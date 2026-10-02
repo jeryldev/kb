@@ -19,20 +19,18 @@ var noteCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		tag, _ := cmd.Flags().GetString("tag")
 		search, _ := cmd.Flags().GetString("search")
-
-		var notes []*model.Note
-		var err error
-
-		switch {
-		case search != "":
-			notes, err = db.SearchNotes(search)
-		case tag != "":
-			notes, err = db.ListNotesByTag(tag)
-		default:
-			notes, err = db.ListNotes()
+		notes := db.ListNotes()
+		if search != "" {
+			notes = db.SearchNotes(search)
 		}
-		if err != nil {
-			return err
+		if tag != "" {
+			var tagged []*model.Note
+			for _, n := range notes {
+				if n.HasTag(tag) {
+					tagged = append(tagged, n)
+				}
+			}
+			notes = tagged
 		}
 		return printNotes(cmd, notes)
 	},
@@ -43,11 +41,115 @@ var noteSearchCmd = &cobra.Command{
 	Short: "Search notes for all the given words",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		notes, err := db.SearchNotes(strings.Join(args, " "))
+		return printNotes(cmd, db.SearchNotes(strings.Join(args, " ")))
+	},
+}
+
+func printNotes(cmd *cobra.Command, notes []*model.Note) error {
+	if jsonOutput {
+		return jsonList(notes, toNoteJSON)
+	}
+	if len(notes) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "No notes found. Create one with: kb note create \"title\"")
+		return nil
+	}
+	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "SLUG\tTITLE\tTAGS\tUPDATED")
+	for _, n := range notes {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", n.Slug, truncateStr(n.Title, 40), strings.Join(n.TagList(), ", "), n.UpdatedAt.Format("02 Jan 2006"))
+	}
+	return w.Flush()
+}
+
+var noteCreateCmd = &cobra.Command{
+	Use:   "create <title>",
+	Short: "Create a note, in a file named after its title",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		slug, _ := cmd.Flags().GetString("slug")
+		body, _ := cmd.Flags().GetString("body")
+		wsName, _ := cmd.Flags().GetString("workspace")
+		workspaceID, err := workspaceIDFor(wsName)
 		if err != nil {
 			return err
 		}
-		return printNotes(cmd, notes)
+		note, err := db.CreateNote(args[0], slug, body, workspaceID)
+		if err != nil {
+			return err
+		}
+		if cmd.Flags().Changed("tags") {
+			note.Tags, _ = cmd.Flags().GetString("tags")
+			if err := db.UpdateNote(note); err != nil {
+				return err
+			}
+		}
+		if jsonOutput {
+			return printJSON(toNoteJSON(note))
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Created note %q (%s)\n", note.Title, note.Path)
+		return nil
+	},
+}
+
+var noteShowCmd = &cobra.Command{
+	Use:   "show <note>",
+	Short: "Show a note",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		note, err := resolveNote(args[0])
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			return printJSON(toNoteJSON(note))
+		}
+		out := cmd.OutOrStdout()
+		fmt.Fprintf(out, "Title: %s\n", note.Title)
+		fmt.Fprintf(out, "Slug:  %s\n", note.Slug)
+		fmt.Fprintf(out, "File:  %s\n", note.Path)
+		if tags := note.TagList(); len(tags) > 0 {
+			fmt.Fprintf(out, "Tags:  %s\n", strings.Join(tags, ", "))
+		}
+		if note.Body != "" {
+			fmt.Fprintf(out, "\n%s\n", note.Body)
+		}
+		fmt.Fprintf(out, "\nCreated: %s   Updated: %s\n", note.CreatedAt.Format("02 Jan 2006"), note.UpdatedAt.Format("02 Jan 2006"))
+		fmt.Fprintf(out, "ID: %s\n", note.ID)
+		return nil
+	},
+}
+
+var noteEditCmd = &cobra.Command{
+	Use:   "edit <note>",
+	Short: "Change a note's title, body or tags",
+	Long: `Change a note's title, body or tags. A new title does not rename the file
+or update links; kb note rename does both.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		note, err := resolveNote(args[0])
+		if err != nil {
+			return err
+		}
+		if !changedAny(cmd, "title", "body", "tags") {
+			return fmt.Errorf("nothing to change; give at least one of --title, --body or --tags")
+		}
+		if cmd.Flags().Changed("title") {
+			note.Title, _ = cmd.Flags().GetString("title")
+		}
+		if cmd.Flags().Changed("body") {
+			note.Body, _ = cmd.Flags().GetString("body")
+		}
+		if cmd.Flags().Changed("tags") {
+			note.Tags, _ = cmd.Flags().GetString("tags")
+		}
+		if err := db.UpdateNote(note); err != nil {
+			return err
+		}
+		if jsonOutput {
+			return printJSON(toNoteJSON(note))
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Updated note %q (%s)\n", note.Title, note.Path)
+		return nil
 	},
 }
 
@@ -70,261 +172,118 @@ var noteRenameCmd = &cobra.Command{
 			}
 			return printJSON(toNoteJSON(renamed))
 		}
-		noun := "notes"
+		noun := "files"
 		if changed == 1 {
-			noun = "note"
+			noun = "file"
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Renamed %q to %q (%s); updated links in %d %s\n",
-			note.Title, renamed.Title, renamed.Path, changed, noun)
+		fmt.Fprintf(cmd.OutOrStdout(), "Renamed %q to %q (%s); updated links in %d %s\n", note.Title, renamed.Title, renamed.Path, changed, noun)
 		return err
 	},
 }
 
-func printNotes(cmd *cobra.Command, notes []*model.Note) error {
-	if len(notes) == 0 {
-		if jsonOutput {
-			return printJSON([]noteJSON{})
-		}
-		fmt.Fprintln(cmd.OutOrStdout(), "No notes found. Create one with: kb note create \"title\"")
-		return nil
-	}
-
-	if jsonOutput {
-		out := make([]noteJSON, len(notes))
-		for i, n := range notes {
-			out[i] = toNoteJSON(n)
-		}
-		return printJSON(out)
-	}
-
-	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "SLUG\tTITLE\tTAGS\tUPDATED")
-	for _, n := range notes {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
-			n.Slug, truncateStr(n.Title, 40), n.Tags,
-			n.UpdatedAt.Format("02 Jan 2006"))
-	}
-	return w.Flush()
-}
-
-var noteCreateCmd = &cobra.Command{
-	Use:   "create <title>",
-	Short: "Create a new note",
+var noteDeleteCmd = &cobra.Command{
+	Use:   "delete <note>",
+	Short: "Move a note's file to the vault's .trash folder",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		title := args[0]
-		slug, _ := cmd.Flags().GetString("slug")
-		if slug == "" {
-			slug = model.Slugify(title)
+		note, err := resolveNote(args[0])
+		if err != nil {
+			return err
 		}
+		force, _ := cmd.Flags().GetBool("force")
+		if err := confirm(cmd, force, fmt.Sprintf("Move note %q (%s) to the trash?", note.Title, note.Path)); err != nil {
+			return err
+		}
+		dest, err := db.TrashNote(note.ID)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			return printJSON(toNoteJSON(note))
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Moved note %q to %s\n", note.Title, dest)
+		return nil
+	},
+}
 
-		body, _ := cmd.Flags().GetString("body")
-
+var noteMoveCmd = &cobra.Command{
+	Use:   "move <note> [--workspace <workspace>]",
+	Short: "Move a note into a workspace (without --workspace, into Default)",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		note, err := resolveNote(args[0])
+		if err != nil {
+			return err
+		}
 		wsName, _ := cmd.Flags().GetString("workspace")
-		workspaceID, err := resolveWorkspaceIDForCreate(wsName)
+		wsID, err := workspaceIDFor(wsName)
 		if err != nil {
 			return err
 		}
-
-		note, err := db.CreateNote(title, slug, body, workspaceID)
-		if err != nil {
-			return err
-		}
-
-		if cmd.Flags().Changed("tags") {
-			note.Tags, _ = cmd.Flags().GetString("tags")
-			if err := db.UpdateNote(note); err != nil {
+		if note.WorkspaceID != wsID {
+			if err := db.SetNoteWorkspace(note.ID, wsID); err != nil {
+				return err
+			}
+			if note, err = db.GetNote(note.ID); err != nil {
 				return err
 			}
 		}
-
-		if err := db.SyncNoteLinks(note); err != nil {
-			return err
-		}
-
 		if jsonOutput {
 			return printJSON(toNoteJSON(note))
 		}
-
-		fmt.Fprintf(cmd.OutOrStdout(), "Created note %q (slug: %s)\n", note.Title, note.Slug)
-		return nil
-	},
-}
-
-var noteShowCmd = &cobra.Command{
-	Use:   "show <slug-or-id>",
-	Short: "Show note details",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		note, err := resolveNote(args[0])
-		if err != nil {
-			return err
-		}
-
-		if jsonOutput {
-			return printJSON(toNoteJSON(note))
-		}
-
-		out := cmd.OutOrStdout()
-		fmt.Fprintf(out, "Title: %s\n", note.Title)
-		fmt.Fprintf(out, "Slug:  %s\n", note.Slug)
-		if note.Tags != "" {
-			fmt.Fprintf(out, "Tags:  %s\n", note.Tags)
-		}
-		if note.Body != "" {
-			fmt.Fprintf(out, "\n%s\n", note.Body)
-		}
-		fmt.Fprintf(out, "\nCreated: %s   Updated: %s\n",
-			note.CreatedAt.Format("02 Jan 2006"), note.UpdatedAt.Format("02 Jan 2006"))
-		fmt.Fprintf(out, "ID: %s\n", note.ID)
-		return nil
-	},
-}
-
-var noteEditCmd = &cobra.Command{
-	Use:   "edit <slug-or-id>",
-	Short: "Edit a note's fields",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		note, err := resolveNote(args[0])
-		if err != nil {
-			return err
-		}
-
-		if cmd.Flags().Changed("title") {
-			note.Title, _ = cmd.Flags().GetString("title")
-		}
-		if cmd.Flags().Changed("body") {
-			note.Body, _ = cmd.Flags().GetString("body")
-		}
-		if cmd.Flags().Changed("tags") {
-			note.Tags, _ = cmd.Flags().GetString("tags")
-		}
-
-		if err := db.UpdateNote(note); err != nil {
-			return err
-		}
-
-		if err := db.SyncNoteLinks(note); err != nil {
-			return err
-		}
-
-		if jsonOutput {
-			return printJSON(toNoteJSON(note))
-		}
-
-		fmt.Fprintf(cmd.OutOrStdout(), "Updated note %q (slug: %s)\n", note.Title, note.Slug)
-		return nil
-	},
-}
-
-var noteDeleteCmd = &cobra.Command{
-	Use:   "delete <slug-or-id>",
-	Short: "Delete a note",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		note, err := resolveNote(args[0])
-		if err != nil {
-			return err
-		}
-
-		if err := db.DeleteNote(note.ID); err != nil {
-			return err
-		}
-
-		if jsonOutput {
-			return printJSON(toNoteJSON(note))
-		}
-
-		fmt.Fprintf(cmd.OutOrStdout(), "Deleted note %q\n", note.Title)
+		fmt.Fprintf(cmd.OutOrStdout(), "Moved note %q to workspace %q\n", note.Title, workspaceName(wsID))
 		return nil
 	},
 }
 
 var noteBacklinksCmd = &cobra.Command{
-	Use:   "backlinks <slug-or-id>",
-	Short: "Show notes and cards that link to this note",
+	Use:   "backlinks <note>",
+	Short: "Show the notes and cards that link to a note",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		note, err := resolveNote(args[0])
 		if err != nil {
 			return err
 		}
-
-		links, err := db.GetBacklinks("note", note.ID)
-		if err != nil {
-			return err
-		}
-
+		links := db.Backlinks(note.ID)
 		if jsonOutput {
-			out := make([]backlinkJSON, len(links))
-			for i, l := range links {
-				out[i] = backlinkJSON{
-					SourceType: l.SourceType,
-					SourceID:   l.SourceID,
-					Context:    l.Context,
-				}
-			}
-			return printJSON(out)
+			return jsonList(links, func(l backlink) backlinkJSON {
+				return backlinkJSON{SourceType: l.SourceType, SourceID: l.SourceID, Title: l.Title, Slug: l.Slug, Board: l.Board, Context: l.Context}
+			})
 		}
-
+		out := cmd.OutOrStdout()
 		if len(links) == 0 {
-			fmt.Fprintf(cmd.OutOrStdout(), "No backlinks to %q\n", note.Slug)
+			fmt.Fprintf(out, "No backlinks to %q\n", note.Title)
 			return nil
 		}
-
-		out := cmd.OutOrStdout()
-		fmt.Fprintf(out, "Backlinks to %q:\n\n", note.Slug)
+		fmt.Fprintf(out, "Backlinks to %q:\n\n", note.Title)
 		for _, l := range links {
-			if l.SourceType == "note" {
-				source, err := db.GetNote(l.SourceID)
-				if err == nil {
-					fmt.Fprintf(out, "  [[%s]] %s\n", source.Slug, truncateStr(l.Context, 60))
-				}
+			source := "[[" + l.Title + "]]"
+			if l.SourceType == "card" {
+				source = fmt.Sprintf("card %s on %s", l.SourceID, l.Board)
 			}
+			fmt.Fprintf(out, "  %s  %s\n", source, truncateStr(strings.TrimSpace(l.Context), 60))
 		}
 		return nil
 	},
 }
 
-// resolveNote finds a note by slug, id or id prefix, or by any name a
-// wikilink could use (title, file name, alias).
-func resolveNote(ref string) (*model.Note, error) {
-	note, err := db.GetNoteBySlug(ref)
-	if err == nil {
-		return note, nil
-	}
-	if len(ref) >= 4 {
-		id, err := db.ResolveNoteID(ref)
-		if err == nil {
-			return db.GetNote(id)
-		}
-	}
-	if note, err := db.ResolveNoteRef(ref); err == nil {
-		return note, nil
-	}
-	return nil, fmt.Errorf("note %q not found", ref)
-}
-
 func init() {
-	noteCmd.Flags().StringP("tag", "t", "", "Filter by tag")
-	noteCmd.Flags().StringP("search", "s", "", "Search in title, body, and tags")
+	noteCmd.Flags().StringP("tag", "t", "", "Only notes with this tag")
+	noteCmd.Flags().StringP("search", "s", "", "Only notes with all these words")
 
-	noteCreateCmd.Flags().StringP("body", "b", "", "Note body content")
+	noteCreateCmd.Flags().StringP("body", "b", "", "Note body")
 	noteCreateCmd.Flags().StringP("tags", "t", "", "Comma-separated tags")
-	noteCreateCmd.Flags().String("slug", "", "Custom slug (default: auto-generated from title)")
-	noteCreateCmd.Flags().StringP("workspace", "w", "", "Workspace to assign the note to (default: Default)")
+	noteCreateCmd.Flags().String("slug", "", "Name the file by this slug instead of the title")
+	noteCreateCmd.Flags().StringP("workspace", "w", "", "Workspace for the note (default: Default)")
 
 	noteEditCmd.Flags().StringP("title", "T", "", "New title")
-	noteEditCmd.Flags().StringP("body", "b", "", "New body content")
-	noteEditCmd.Flags().StringP("tags", "t", "", "New tags (comma-separated)")
+	noteEditCmd.Flags().StringP("body", "b", "", "New body")
+	noteEditCmd.Flags().StringP("tags", "t", "", "New tags, comma-separated")
 
-	noteCmd.AddCommand(noteCreateCmd)
-	noteCmd.AddCommand(noteShowCmd)
-	noteCmd.AddCommand(noteEditCmd)
-	noteCmd.AddCommand(noteDeleteCmd)
-	noteCmd.AddCommand(noteBacklinksCmd)
-	noteCmd.AddCommand(noteSearchCmd)
-	noteCmd.AddCommand(noteRenameCmd)
+	noteDeleteCmd.Flags().BoolP("force", "f", false, "Skip confirmation")
+	noteMoveCmd.Flags().StringP("workspace", "w", "", "Workspace to move to (default: Default)")
+
+	noteCmd.AddCommand(noteCreateCmd, noteShowCmd, noteEditCmd, noteDeleteCmd, noteBacklinksCmd, noteSearchCmd, noteRenameCmd, noteMoveCmd)
 	rootCmd.AddCommand(noteCmd)
 }

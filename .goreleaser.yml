@@ -3,6 +3,7 @@ version: 2
 before:
   hooks:
     - go mod tidy
+    - go test ./...
 
 builds:
   - env:
@@ -14,23 +15,14 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w
+      - -s -w -X github.com/jeryldev/kb/cmd.version={{ .Version }}
 
 archives:
-  - format: tar.gz
+  - formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
 
-brews:
-  - directory: Formula
-    repository:
-      owner: jeryldev
-      name: homebrew-tap
-    skip_upload: true
-    homepage: "https://github.com/jeryldev/kb"
-    description: "Terminal notes and Kanban boards, with notes as Markdown files"
-    license: "MIT"
-    install: |
-      bin.install "kb"
+# The Homebrew formula lives in jeryldev/homebrew-tap and is updated by
+# hand with each release's URL and checksum.
 
 checksum:
   name_template: "checksums.txt"
