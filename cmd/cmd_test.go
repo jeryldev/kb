@@ -2542,3 +2542,103 @@ func TestShowFindsANoteByTitle(t *testing.T) {
 		t.Errorf("output: %s", out)
 	}
 }
+
+func TestPublishDatesPostsByCreationAndLinksEarlierPosts(t *testing.T) {
+	setupTestDB(t)
+	site := t.TempDir()
+	executeCmd(t, "publish", "setup", "site", "--engine", "jekyll", "--path", site, "--json")
+	root := db.Vault().Root()
+	os.WriteFile(filepath.Join(root, "Dual Transformation.md"), []byte("---\ncreated: 2026-05-13\n---\nThe book."), 0o644)
+	os.WriteFile(filepath.Join(root, "Offsite.md"), []byte("---\ncreated: 2026-06-02\n---\nRead [[dual transformation#Part 2|part two]] first."), 0o644)
+	if _, err := db.Scan(); err != nil {
+		t.Fatal(err)
+	}
+
+	executeCmd(t, "publish", "dual-transformation")
+	// Republished on another day, it must update the same post, not add one.
+	executeCmd(t, "publish", "dual-transformation")
+	posts, _ := filepath.Glob(filepath.Join(site, "_posts", "*.md"))
+	if len(posts) != 1 || filepath.Base(posts[0]) != "2026-05-13-dual-transformation.md" {
+		t.Fatalf("posts = %v", posts)
+	}
+
+	executeCmd(t, "publish", "offsite")
+	data, err := os.ReadFile(filepath.Join(site, "_posts", "2026-06-02-offsite.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "Read [part two](/blog/2026/05/13/dual-transformation/) first.") {
+		t.Errorf("post:\n%s", data)
+	}
+	if !strings.Contains(string(data), "date: 2026-06-02") {
+		t.Errorf("post date:\n%s", data)
+	}
+}
+
+func publishSite(t *testing.T) string {
+	t.Helper()
+	site := t.TempDir()
+	executeCmd(t, "publish", "setup", "site", "--engine", "jekyll", "--path", site, "--json")
+	return site
+}
+
+func vaultNote(t *testing.T, rel, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(db.Vault().Root(), rel), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Scan(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPublishUsesTheWritersCalendarDate(t *testing.T) {
+	setupTestDB(t)
+	site := publishSite(t)
+	// Written at 4am on 2 Oct in Manila, which is still 1 Oct in UTC.
+	orig := time.Local
+	time.Local = time.FixedZone("Manila", 8*3600)
+	t.Cleanup(func() { time.Local = orig })
+	vaultNote(t, "Morning.md", "---\ncreated: 2026-10-01T20:00:00Z\n---\nx")
+
+	executeCmd(t, "publish", "morning")
+	if _, err := os.Stat(filepath.Join(site, "_posts", "2026-10-02-morning.md")); err != nil {
+		posts, _ := filepath.Glob(filepath.Join(site, "_posts", "*"))
+		t.Errorf("post not dated 2026-10-02: %v", posts)
+	}
+}
+
+func TestPublishNeverOverwritesAnotherNotesPost(t *testing.T) {
+	setupTestDB(t)
+	site := publishSite(t)
+	vaultNote(t, "Foo.md", "---\ncreated: 2026-05-13\n---\nthe first note")
+	executeCmd(t, "publish", "foo")
+	executeCmd(t, "notes", "rename", "foo", "Bar")
+	executeCmd(t, "publish", "bar") // keeps its post at the old URL
+
+	vaultNote(t, "Foo.md", "---\ncreated: 2026-05-13\n---\na different note")
+	executeCmd(t, "publish", "foo")
+
+	first, _ := os.ReadFile(filepath.Join(site, "_posts", "2026-05-13-foo.md"))
+	if !strings.Contains(string(first), "the first note") {
+		t.Errorf("the first post was overwritten:\n%s", first)
+	}
+	second, err := os.ReadFile(filepath.Join(site, "_posts", "2026-05-13-foo-2.md"))
+	if err != nil || !strings.Contains(string(second), "a different note") {
+		t.Errorf("second post: %v\n%s", err, second)
+	}
+}
+
+func TestPublishDoesNotLinkToDrafts(t *testing.T) {
+	setupTestDB(t)
+	site := publishSite(t)
+	vaultNote(t, "Secret.md", "---\ncreated: 2026-05-13\n---\nnot yet")
+	vaultNote(t, "Public.md", "---\ncreated: 2026-05-14\n---\nsee [[Secret]]")
+	executeCmd(t, "publish", "secret", "--draft")
+	executeCmd(t, "publish", "public")
+
+	data, _ := os.ReadFile(filepath.Join(site, "_posts", "2026-05-14-public.md"))
+	if !strings.Contains(string(data), "see Secret") || strings.Contains(string(data), "](/blog") {
+		t.Errorf("a draft was linked:\n%s", data)
+	}
+}

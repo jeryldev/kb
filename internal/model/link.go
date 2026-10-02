@@ -97,20 +97,28 @@ func ExtractMarkdownLinks(text string) []ParsedLink {
 	return links
 }
 
+// ReplaceWikilinks replaces each [[target]] or [[target|display]] in text
+// with what replace returns for it. Links never span lines.
+func ReplaceWikilinks(text string, replace func(target, display string, hasDisplay bool) string) string {
+	return wikilinkRe.ReplaceAllStringFunc(text, func(link string) string {
+		target, display, hasDisplay := strings.Cut(link[2:len(link)-2], "|")
+		return replace(target, display, hasDisplay)
+	})
+}
+
 // RewriteWikilinks replaces the target of each [[target]] or
 // [[target|display]] in text for which rewrite returns a new target and
 // true, keeping the display text. It returns the new text and how many
 // links changed.
 func RewriteWikilinks(text string, rewrite func(target string) (string, bool)) (string, int) {
 	changed := 0
-	out := wikilinkRe.ReplaceAllStringFunc(text, func(link string) string {
-		inner := link[2 : len(link)-2]
-		target, display, hasDisplay := strings.Cut(inner, "|")
+	out := ReplaceWikilinks(text, func(target, display string, hasDisplay bool) string {
 		replacement, ok := rewrite(target)
 		if !ok {
-			return link
+			replacement = target
+		} else {
+			changed++
 		}
-		changed++
 		if hasDisplay {
 			return "[[" + replacement + "|" + display + "]]"
 		}
