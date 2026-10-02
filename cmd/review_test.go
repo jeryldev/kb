@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -322,5 +323,68 @@ func TestStartupOpensTheVaultAndWaitsForAnImport(t *testing.T) {
 	_, err := executeCmdErr(t, "notes")
 	if err == nil || !strings.Contains(err.Error(), "kb import") {
 		t.Errorf("err = %v, want it to say to run kb import", err)
+	}
+}
+
+func TestImportCommandDryRunThenImport(t *testing.T) {
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		t.Skip("sqlite3 is not installed")
+	}
+	dir := t.TempDir()
+	t.Setenv("KB_VAULT", filepath.Join(dir, "vault"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "data"))
+	t.Setenv("KB_BOARD", "")
+	db = nil
+	t.Cleanup(func() { db = nil })
+
+	dbPath := filepath.Join(dir, "data", "kb", "kb.db")
+	os.MkdirAll(filepath.Dir(dbPath), 0o755)
+	schema, err := os.ReadFile("../internal/legacy/testdata/schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	build := exec.Command("sqlite3", dbPath)
+	build.Stdin = strings.NewReader(string(schema) + `
+INSERT INTO workspaces (id, name, kind) VALUES ('w0', 'Default', 'area');
+INSERT INTO boards (id, name, workspace_id) VALUES ('b1', 'Side Project', 'w0');
+INSERT INTO columns (id, board_id, name, position) VALUES ('c1', 'b1', 'Todo', 0), ('c2', 'b1', 'Done', 1);
+INSERT INTO cards (id, column_id, title, labels, priority, position) VALUES ('0123abcd-0000-4000-8000-000000000000', 'c1', 'First task', 'label 1', 'urgent', 0);
+`)
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+
+	out := executeCmd(t, "import", "--dry-run")
+	if !strings.Contains(out, "board Side Project (Boards/Side Project.md): 1 card") || !strings.Contains(out, `"label 1" becomes #label-1`) || !strings.Contains(out, "Nothing was written") {
+		t.Errorf("dry run:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "vault", "Boards")); !os.IsNotExist(err) {
+		t.Error("a dry run wrote to the vault")
+	}
+	db = nil
+	if _, err := executeCmdErr(t, "boards"); err == nil {
+		t.Error("kb should still wait for the import")
+	}
+
+	db = nil
+	out = executeCmd(t, "import")
+	if !strings.Contains(out, "Done.") {
+		t.Errorf("import:\n%s", out)
+	}
+	if _, err := os.Stat(dbPath + ".imported-0.4"); err != nil {
+		t.Error(err)
+	}
+	db = nil
+	out = executeCmd(t, "cards", "show", "0123abcd", "--json")
+	var c cardJSON
+	json.Unmarshal([]byte(out), &c)
+	if c.Title != "First task" || c.Priority != "urgent" || strings.Join(c.Labels, ",") != "label-1" || c.Board != "Side Project" {
+		t.Errorf("imported card = %+v", c)
+	}
+	db = nil
+	if out := executeCmd(t, "import"); !strings.Contains(out, "Already imported") {
+		t.Errorf("second import:\n%s", out)
 	}
 }
