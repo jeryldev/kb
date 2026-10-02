@@ -28,6 +28,9 @@ var (
 	// ErrConflict means a file changed after kb read it. The store has
 	// been reloaded, so reading again gives the current version.
 	ErrConflict = errors.New("changed on disk since it was read; reload it and try again")
+	// ErrNotDownloaded means a note is in iCloud and not on this machine,
+	// so kb knows only its name.
+	ErrNotDownloaded = errors.New("is in iCloud and not downloaded yet; open it (kb open) to download it, then try again")
 )
 
 type Note = model.Note
@@ -71,6 +74,7 @@ type Store struct {
 	bySlug   map[string]*Note
 	aliases  map[string][]string // note id → aliases
 	docs     map[string]*vault.Doc
+	dataless map[string]bool // notes in iCloud, not downloaded: name only
 	boards   []*boardFile
 	links    []Link
 	problems []string
@@ -226,6 +230,7 @@ func (s *Store) buildNotes(cands []*candidate) {
 	s.notes = nil
 	s.byID, s.byPath, s.bySlug = map[string]*Note{}, map[string]*Note{}, map[string]*Note{}
 	s.aliases, s.docs = map[string][]string{}, map[string]*vault.Doc{}
+	s.dataless = map[string]bool{}
 	for _, c := range cands {
 		n := &Note{
 			ID:          ids[c],
@@ -253,6 +258,9 @@ func (s *Store) buildNotes(cands []*candidate) {
 		s.bySlug[n.Slug] = n
 		s.aliases[n.ID] = c.doc.Aliases()
 		s.docs[n.ID] = c.doc
+		if c.dataless {
+			s.dataless[n.ID] = true
+		}
 	}
 }
 

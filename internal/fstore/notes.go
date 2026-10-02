@@ -244,6 +244,11 @@ func (s *Store) UpdateNote(note *Note) error {
 	if !ok {
 		return fmt.Errorf("note %q: %w", note.ID, ErrNotFound)
 	}
+	// kb has only the name of a note that is not downloaded; its empty
+	// body must never be saved over the real one.
+	if s.dataless[note.ID] {
+		return fmt.Errorf("%s %w", current.Path, ErrNotDownloaded)
+	}
 	err := s.writeLocked(current.Path, func() error {
 		doc, err := s.readForWrite(current, note.Rev)
 		if err != nil {
@@ -365,3 +370,7 @@ func (s *Store) ResolveNoteRef(ref string) (*Note, error) {
 	}
 	return nil, fmt.Errorf("note %q: %w", ref, ErrNotFound)
 }
+
+// NotDownloaded reports whether a note is in iCloud and not on this
+// machine, so that kb knows only its name.
+func (s *Store) NotDownloaded(id string) bool { return s.dataless[id] }

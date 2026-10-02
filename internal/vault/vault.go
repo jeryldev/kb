@@ -98,7 +98,7 @@ func (v *Vault) WalkSkipping(fn func(Entry) error, skipped func(rel string, err 
 		if err != nil {
 			return err
 		}
-		return fn(Entry{Path: filepath.ToSlash(rel), ModTime: info.ModTime(), Size: info.Size(), Dataless: isDataless(info)})
+		return fn(Entry{Path: filepath.ToSlash(rel), ModTime: info.ModTime(), Size: info.Size(), Dataless: IsDataless(info)})
 	})
 }
 
@@ -222,3 +222,7 @@ func (v *Vault) Remove(rel string) error {
 	}
 	return nil
 }
+
+// IsDataless reports whether a file's contents are in iCloud and not on
+// this machine. Tests replace it to act out such files.
+var IsDataless = isDataless

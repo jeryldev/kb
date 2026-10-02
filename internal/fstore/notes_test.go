@@ -2,12 +2,15 @@ package fstore
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jeryldev/kb/internal/vault"
 )
 
 func testStore(t *testing.T) *Store {
@@ -347,5 +350,35 @@ func TestEditingKeepsTheFilesSpellingOfItsWorkspace(t *testing.T) {
 	}
 	if !strings.Contains(read(t, s, "Lecture.md"), "workspace: school") {
 		t.Errorf("the file's spelling was rewritten:\n%s", read(t, s, "Lecture.md"))
+	}
+}
+
+// A note iCloud has not downloaded is read as its name only, with an empty
+// body; saving that body would wipe the note once the file arrives. Whole
+// saves refuse, and edits that change one key work on the real file.
+func TestANoteInICloudIsNeverOverwrittenWithItsPlaceholder(t *testing.T) {
+	s := testStore(t)
+	put(t, s, "Remote.md", "---\ntags: [a]\n---\nthe real text\n")
+	vault.IsDataless = func(info fs.FileInfo) bool { return info.Name() == "Remote.md" }
+	t.Cleanup(func() { vault.IsDataless = func(fs.FileInfo) bool { return false } })
+	if err := s.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	note, err := s.GetNoteByPath("Remote.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	note.Tags = "b"
+	if err := s.UpdateNote(note); !errors.Is(err, ErrNotDownloaded) {
+		t.Errorf("err = %v, want ErrNotDownloaded", err)
+	}
+	if got := read(t, s, "Remote.md"); !strings.Contains(got, "the real text") {
+		t.Errorf("file = %q", got)
+	}
+	if err := s.ArchiveNote(note.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, s, "Remote.md"); !strings.Contains(got, "the real text") || !strings.Contains(got, "archived:") {
+		t.Errorf("file = %q", got)
 	}
 }

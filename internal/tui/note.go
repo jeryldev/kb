@@ -137,7 +137,9 @@ func (a *App) viewNoteDetail() string {
 			meta += "   " + labelStyle.Render("#"+strings.Join(tags, " #"))
 		}
 		sections := []string{ansi.Truncate(meta, contentW, "…"), ""}
-		if note.Body != "" {
+		if a.db.NotDownloaded(note.ID) {
+			sections = append(sections, emptyColumnStyle.Render("(in iCloud and not downloaded yet; press e to open it, which downloads it)"))
+		} else if note.Body != "" {
 			sections = append(sections, lipgloss.NewStyle().Width(contentW).Render(note.Body))
 		} else {
 			sections = append(sections, emptyColumnStyle.Render("(empty note)"))

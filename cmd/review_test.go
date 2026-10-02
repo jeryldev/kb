@@ -388,3 +388,19 @@ INSERT INTO cards (id, column_id, title, labels, priority, position) VALUES ('01
 		t.Errorf("second import:\n%s", out)
 	}
 }
+
+// A note whose frontmatter is broken can still be found and deleted, and
+// an edit says what to fix rather than overwrite it (A11).
+func TestANoteWithBrokenFrontmatter(t *testing.T) {
+	setupTestDB(t)
+	path := filepath.Join(db.Vault().Root(), "Broken.md")
+	os.WriteFile(path, []byte("---\ntitle: [unclosed\n---\nbody\n"), 0o644)
+	db.Reload()
+	if _, err := executeCmdErr(t, "notes", "edit", "broken", "--body", "x"); err == nil || !strings.Contains(err.Error(), "frontmatter") {
+		t.Errorf("edit: err = %v", err)
+	}
+	executeCmd(t, "notes", "delete", "broken", "-f")
+	if _, err := os.Stat(filepath.Join(db.Vault().Root(), ".trash", "Broken.md")); err != nil {
+		t.Error(err)
+	}
+}
