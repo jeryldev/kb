@@ -1,17 +1,12 @@
 package model
 
-import (
-	"fmt"
-	"time"
-)
+import "fmt"
 
 type Board struct {
 	ID          string
 	Name        string
 	Description string
 	WorkspaceID string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
 }
 
 func ValidateBoardName(name string) error {
@@ -23,5 +18,3 @@ func ValidateBoardName(name string) error {
 	}
 	return nil
 }
-
-var DefaultColumns = []string{"Backlog", "Todo", "In Progress", "Review", "Done"}

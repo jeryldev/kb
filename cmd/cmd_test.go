@@ -557,11 +557,7 @@ func TestFormatTime(t *testing.T) {
 
 func TestToBoardJSON(t *testing.T) {
 	setupTestDB(t)
-	now := time.Now().UTC()
-	b := &model.Board{
-		ID: "board-123", Name: "test", Description: "desc",
-		CreatedAt: now, UpdatedAt: now,
-	}
+	b := &model.Board{ID: "board-123", Name: "test", Description: "desc"}
 	j := toBoardJSON(b)
 	if j.ID != "board-123" || j.Name != "test" || j.Description != "desc" {
 		t.Errorf("toBoardJSON() fields mismatch: %+v", j)
@@ -881,7 +877,7 @@ func TestColumnsListHuman(t *testing.T) {
 
 	out := executeCmd(t, "columns")
 
-	for _, name := range model.DefaultColumns {
+	for _, name := range []string{"Backlog", "Todo", "In Progress", "Review", "Done"} {
 		if !strings.Contains(out, name) {
 			t.Errorf("expected column %q in output: %s", name, out)
 		}

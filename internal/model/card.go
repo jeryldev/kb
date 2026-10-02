@@ -66,9 +66,6 @@ type Card struct {
 	Labels      string
 	ExternalID  string
 	ArchivedAt  *time.Time
-	DeletedAt   *time.Time
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
 	// Rev identifies the card's text as read; an edit carrying a stale Rev
 	// is refused rather than overwrite a change made since.
 	Rev string

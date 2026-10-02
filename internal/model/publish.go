@@ -33,12 +33,3 @@ type PublishTarget struct {
 	Permalink string
 	CreatedAt time.Time
 }
-
-type PublishLog struct {
-	ID          string
-	NoteID      string
-	TargetID    string
-	FilePath    string
-	FrontMatter string
-	PublishedAt time.Time
-}
