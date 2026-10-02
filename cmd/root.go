@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 
 	"github.com/jeryldev/kb/internal/fstore"
@@ -14,6 +15,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// version is set at release time (goreleaser's ldflags); a go install
+// build reports its module version instead.
+var version = "dev"
 
 var (
 	db         *fstore.Store
@@ -94,7 +99,17 @@ func isTerminal(f *os.File) bool {
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
+func versionString() string {
+	if version == "dev" {
+		if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+			return strings.TrimPrefix(info.Main.Version, "v")
+		}
+	}
+	return version
+}
+
 func init() {
+	rootCmd.Version = versionString()
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
 	rootCmd.PersistentFlags().StringVarP(&boardFlag, "board", "B", "", "Board to use (default: $KB_BOARD, the dev tmux session, or the folder name)")
 }

@@ -485,3 +485,15 @@ func TestANoteWithBrokenFrontmatter(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func TestVersionWorksWhileAnImportWaits(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dir)
+	os.MkdirAll(filepath.Join(dir, "kb"), 0o755)
+	os.WriteFile(filepath.Join(dir, "kb", "kb.db"), nil, 0o644)
+	db = nil
+	t.Cleanup(func() { db = nil })
+	if out := executeCmd(t, "--version"); !strings.HasPrefix(out, "kb version ") {
+		t.Errorf("output: %q", out)
+	}
+}
