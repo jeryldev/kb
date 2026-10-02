@@ -278,3 +278,60 @@ func (d *Doc) setTime(key string, t *time.Time) {
 	}
 	d.set(key, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!timestamp", Value: t.UTC().Format(time.RFC3339)})
 }
+
+// Publication is where a note was published on one target.
+type Publication struct {
+	Path  string
+	Draft bool
+}
+
+// Published reads the note's publish history: the `published` key maps a
+// target's name to the post's path, or to {path, draft: true} for a draft.
+func (d *Doc) Published() map[string]Publication {
+	v := d.get("published")
+	if v == nil || v.Kind != yaml.MappingNode {
+		return nil
+	}
+	out := map[string]Publication{}
+	for i := 0; i+1 < len(v.Content); i += 2 {
+		name, val := v.Content[i].Value, v.Content[i+1]
+		switch val.Kind {
+		case yaml.ScalarNode:
+			out[name] = Publication{Path: val.Value}
+		case yaml.MappingNode:
+			var p struct {
+				Path  string `yaml:"path"`
+				Draft bool   `yaml:"draft"`
+			}
+			if val.Decode(&p) == nil {
+				out[name] = Publication{Path: p.Path, Draft: p.Draft}
+			}
+		}
+	}
+	return out
+}
+
+// SetPublished records a post for one target in the `published` key,
+// keeping the other targets' entries.
+func (d *Doc) SetPublished(target string, p Publication) {
+	m := d.get("published")
+	if m == nil || m.Kind != yaml.MappingNode {
+		m = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	}
+	value := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: p.Path}
+	if p.Draft {
+		value = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Style: yaml.FlowStyle, Content: []*yaml.Node{
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "path"}, {Kind: yaml.ScalarNode, Tag: "!!str", Value: p.Path},
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "draft"}, {Kind: yaml.ScalarNode, Tag: "!!bool", Value: "true"},
+		}}
+	}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == target {
+			m.Content[i+1] = value
+			d.set("published", m)
+			return
+		}
+	}
+	m.Content = append(m.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: target}, value)
+	d.set("published", m)
+}
