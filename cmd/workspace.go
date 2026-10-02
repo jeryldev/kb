@@ -211,7 +211,7 @@ func init() {
 	workspaceEditCmd.Flags().StringP("name", "n", "", "New name")
 	workspaceEditCmd.Flags().StringP("description", "d", "", "New description")
 	workspaceEditCmd.Flags().StringP("path", "p", "", "New folder")
-	workspaceEditCmd.Flags().StringP("kind", "k", "", "New kind")
+	workspaceEditCmd.Flags().StringP("kind", "k", "", "New kind (project, area, resource, archive)")
 
 	workspaceCmd.AddCommand(workspaceCreateCmd, workspaceShowCmd, workspaceEditCmd, workspaceArchiveCmd, workspaceDeleteCmd)
 	rootCmd.AddCommand(workspaceCmd)
