@@ -16,9 +16,9 @@ var (
 				Underline(true)
 
 	cardNormalBorder = lipgloss.NewStyle().
-			BorderStyle(lipgloss.NormalBorder()).
-			Faint(true).
-			Padding(0, 1)
+				BorderStyle(lipgloss.NormalBorder()).
+				Faint(true).
+				Padding(0, 1)
 
 	cardSelectedBorder = lipgloss.NewStyle().
 				BorderStyle(lipgloss.NormalBorder()).

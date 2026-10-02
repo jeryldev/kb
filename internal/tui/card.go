@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/jeryldev/kb/internal/fstore"
 	"github.com/jeryldev/kb/internal/model"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -33,204 +34,84 @@ func relativeTime(t time.Time) string {
 	}
 }
 
+// --- Card viewer (modeCardView) ---
+
 type cardViewModel struct {
 	card       *model.Card
-	colName    string
-	formWidth  int
 	confirming string
 }
 
 func (a *App) updateCardView(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case cardArchivedMsg, cardDeletedMsg:
-		a.mode = modeBoard
-		return a, a.loadBoard()
-
-	case errMsg:
-		a.board.err = msg.err
-		a.mode = modeBoard
+	key, ok := msg.(tea.KeyMsg)
+	if !ok {
 		return a, nil
-
-	case tea.KeyMsg:
-		if a.cardView.confirming != "" {
-			return a.updateCardViewConfirming(msg)
-		}
-
-		switch msg.String() {
-		case "e":
-			return a, a.editSelectedCard()
-		case "d":
-			a.cardView.confirming = "archive"
-		case "D":
-			a.cardView.confirming = "delete"
-		case "esc", "q":
-			a.mode = modeBoard
-			return a, nil
-		}
 	}
-	return a, nil
-}
-
-func (a *App) updateCardViewConfirming(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "y", "Y":
-		action := a.cardView.confirming
-		a.cardView.confirming = ""
-		card := a.cardView.card
-		if card == nil {
-			return a, nil
+	v := &a.cardView
+	if v.confirming != "" {
+		action := v.confirming
+		v.confirming = ""
+		if isYes(key) && a.archiveOrDelete(action, v.card) {
+			a.mode = modeBoard
+			a.loadBoard()
 		}
-		switch action {
-		case "archive":
-			return a, func() tea.Msg {
-				if err := a.db.ArchiveCard(card.ID); err != nil {
-					return errMsg{err}
-				}
-				return cardArchivedMsg{}
-			}
-		case "delete":
-			return a, func() tea.Msg {
-				if err := a.db.DeleteCard(card.ID); err != nil {
-					return errMsg{err}
-				}
-				return cardDeletedMsg{}
-			}
-		}
-	default:
-		a.cardView.confirming = ""
+		return a, nil
+	}
+	switch key.String() {
+	case "e":
+		return a, a.editSelectedCard(modeCardView)
+	case "d":
+		v.confirming = "archive"
+	case "D":
+		v.confirming = "delete"
+	case "esc", "q", "b":
+		a.mode = modeBoard
 	}
 	return a, nil
 }
 
 func (a *App) viewCardReadonly() string {
-	w := a.width
-	if w == 0 {
-		w = 80
-	}
-	h := a.height
-	if h == 0 {
-		h = 24
-	}
-
 	card := a.cardView.card
-	fw := a.cardView.formWidth
-	labelW := 14
-
-	titleBar := titleBarStyle.Width(w).Render(" View Card ")
-	statusBar := statusBarStyle.Width(w).Render(" e: edit   d: archive   D: delete   Esc: back")
-
-	fieldLabel := func(name string) string {
-		return formLabelStyle.Width(labelW).Align(lipgloss.Right).Render(name)
+	fw := a.cardFormWidth()
+	const labelW = 14
+	field := func(name, value string) string {
+		return lipgloss.JoinHorizontal(lipgloss.Top, formLabelStyle.Width(labelW).Align(lipgloss.Right).Render(name), "  ", value)
 	}
-
-	var rows []string
-
-	rows = append(rows,
-		lipgloss.JoinHorizontal(lipgloss.Top,
-			fieldLabel("Title"),
-			"  ",
-			lipgloss.NewStyle().Bold(true).Render(card.Title),
-		))
-
-	rows = append(rows,
-		lipgloss.JoinHorizontal(lipgloss.Top,
-			fieldLabel("Column"),
-			"  ",
-			formValueStyle.Render(a.cardView.colName),
-		))
-
-	pStyle := priorityStyle(string(card.Priority))
-	rows = append(rows,
-		lipgloss.JoinHorizontal(lipgloss.Top,
-			fieldLabel("Priority"),
-			"  ",
-			pStyle.Render(string(card.Priority)),
-		))
-
-	if card.Labels != "" {
-		rows = append(rows,
-			lipgloss.JoinHorizontal(lipgloss.Top,
-				fieldLabel("Labels"),
-				"  ",
-				labelStyle.Render(card.Labels),
-			))
+	rows := []string{
+		field("Title", lipgloss.NewStyle().Bold(true).Render(card.Title)),
+		field("Column", formValueStyle.Render(card.ColumnID)),
+		field("Priority", priorityStyle(string(card.Priority)).Render(string(card.Priority))),
 	}
-
+	if l := labelText(card); l != "" {
+		rows = append(rows, field("Labels", labelStyle.Render(l)))
+	}
 	if card.ExternalID != "" {
-		rows = append(rows,
-			lipgloss.JoinHorizontal(lipgloss.Top,
-				fieldLabel("External ID"),
-				"  ",
-				formValueStyle.Render(card.ExternalID),
-			))
+		rows = append(rows, field("External ID", formValueStyle.Render(card.ExternalID)))
 	}
-
-	created := relativeTime(card.CreatedAt)
-	updated := relativeTime(card.UpdatedAt)
-	rows = append(rows, "")
-	meta := helpStyle.Render(fmt.Sprintf("Created: %s   Updated: %s", created, updated))
-	rows = append(rows,
-		lipgloss.JoinHorizontal(lipgloss.Top,
-			lipgloss.NewStyle().Width(labelW).Render(""),
-			"  ",
-			meta,
-		))
-
-	dialogH := h * 80 / 100
-
-	if card.Description != "" {
-		rows = append(rows, "")
-		descWidth := fw - labelW - 4
-		rendered := formValueStyle.Width(descWidth).Render(card.Description)
-		descLines := strings.Split(rendered, "\n")
-
-		// border(2) + padding(2) + current rows + blank before desc
-		overhead := 4 + len(rows) + 1
-		maxDescLines := dialogH - overhead
-		if maxDescLines < 1 {
-			maxDescLines = 1
+	return a.frame(" View Card ", " e: edit   d: archive   D: delete   Esc: back", nil, func(w, h int) string {
+		if a.cardView.confirming != "" {
+			verb := "Archive"
+			if a.cardView.confirming == "delete" {
+				verb = "Delete"
+			}
+			return renderCenteredConfirm(w, h, fmt.Sprintf("%s %q?", verb, truncate(card.Title, 30)))
 		}
-		if len(descLines) > maxDescLines {
-			descLines = append(descLines[:maxDescLines-1], helpStyle.Render("... (truncated)"))
+		dialogH := max(8, h*90/100)
+		all := rows
+		if card.Description != "" {
+			desc := strings.Split(formValueStyle.Width(fw-labelW-6).Render(card.Description), "\n")
+			// The border and padding take 4 lines, the blank line 1.
+			room := max(1, dialogH-4-len(rows)-1)
+			if len(desc) > room {
+				desc = append(desc[:room-1], helpStyle.Render("... (press e to see it all)"))
+			}
+			all = append(append([]string{}, rows...), "", field("Description", strings.Join(desc, "\n")))
 		}
-
-		rows = append(rows,
-			lipgloss.JoinHorizontal(lipgloss.Top,
-				fieldLabel("Description"),
-				"  ",
-				strings.Join(descLines, "\n"),
-			))
-	}
-
-	form := lipgloss.JoinVertical(lipgloss.Left, rows...)
-	dialog := dialogBoxStyle.Width(fw).Height(dialogH).Render(form)
-
-	contentHeight := h - lipgloss.Height(titleBar) - lipgloss.Height(statusBar) - 1
-
-	var content string
-	if a.cardView.confirming != "" {
-		content = a.renderCardViewConfirmDialog(w, contentHeight)
-	} else {
-		content = lipgloss.Place(w, contentHeight, lipgloss.Center, lipgloss.Center, dialog)
-	}
-
-	return lipgloss.JoinVertical(lipgloss.Left, titleBar, content, statusBar)
+		dialog := dialogBoxStyle.Width(min(fw, w)).MaxHeight(dialogH).Render(lipgloss.JoinVertical(lipgloss.Left, all...))
+		return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, dialog)
+	})
 }
 
-func (a *App) renderCardViewConfirmDialog(totalWidth, contentHeight int) string {
-	card := a.cardView.card
-	if card == nil {
-		return renderCenteredConfirm(totalWidth, contentHeight, "No card selected")
-	}
-
-	verb := a.cardView.confirming
-	if len(verb) > 0 {
-		verb = strings.ToUpper(verb[:1]) + verb[1:]
-	}
-	prompt := fmt.Sprintf("%s %q?", verb, truncate(card.Title, 30))
-
-	return renderCenteredConfirm(totalWidth, contentHeight, prompt)
-}
+// --- Card form (modeCardEdit) ---
 
 type cardField int
 
@@ -244,13 +125,12 @@ const (
 )
 
 type cardModel struct {
-	card       *model.Card
-	isNew      bool
-	columnID   string
-	columns    []*model.Column
-	colIndex   int
-	field      cardField
-	priority   model.Priority
+	card     *model.Card // nil for a new card
+	boardID  string
+	lane     string
+	returnTo mode
+	field    cardField
+	priority model.Priority
 
 	titleInput      textinput.Model
 	labelsInput     textinput.Model
@@ -258,22 +138,10 @@ type cardModel struct {
 	descInput       textarea.Model
 
 	formWidth int
-	err       error
 }
 
-type cardSavedMsg struct {
-	card *model.Card
-}
-
-func newCardModel(card *model.Card, columnID string, columns []*model.Column, termWidth int) cardModel {
-	formW := termWidth * 80 / 100
-	if formW > 100 {
-		formW = 100
-	}
-	if formW < 50 {
-		formW = 50
-	}
-
+func newCardModel(card *model.Card, boardID, lane string, termWidth int, returnTo mode) cardModel {
+	formW := max(50, min(termWidth*80/100, 100))
 	inputWidth := formW - 22
 
 	ti := textinput.New()
@@ -301,91 +169,56 @@ func newCardModel(card *model.Card, columnID string, columns []*model.Column, te
 	di.FocusedStyle.Base = lipgloss.NewStyle()
 	di.BlurredStyle.Base = lipgloss.NewStyle()
 
-	colIdx := 0
-	for i, col := range columns {
-		if col.ID == columnID {
-			colIdx = i
-			break
-		}
-	}
-
 	cm := cardModel{
-		columnID:        columnID,
-		columns:         columns,
-		colIndex:        colIdx,
-		field:           fieldTitle,
-		priority:        model.PriorityMedium,
-		titleInput:      ti,
-		labelsInput:     li,
-		externalIDInput: ei,
-		descInput:       di,
-		formWidth:       formW,
-		isNew:           card == nil,
+		boardID: boardID, lane: lane, returnTo: returnTo,
+		titleInput: ti, labelsInput: li, externalIDInput: ei, descInput: di,
+		formWidth: formW, priority: model.PriorityMedium,
 	}
-
 	if card != nil {
 		cm.card = card
 		cm.priority = card.Priority
 		cm.titleInput.SetValue(card.Title)
-		cm.labelsInput.SetValue(card.Labels)
+		cm.labelsInput.SetValue(strings.Join(card.LabelList(), ", "))
 		cm.externalIDInput.SetValue(card.ExternalID)
 		cm.descInput.SetValue(card.Description)
-
-		for i, col := range columns {
-			if col.ID == card.ColumnID {
-				cm.colIndex = i
-				break
-			}
-		}
 	}
-
 	return cm
 }
 
-func (c cardModel) Init() tea.Cmd {
-	return textinput.Blink
-}
+func (c cardModel) Init() tea.Cmd { return textinput.Blink }
 
 func (a *App) updateCard(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case cardSavedMsg:
-		a.mode = modeBoard
-		return a, a.loadBoard()
-
-	case errMsg:
-		a.card.err = msg.err
-		return a, nil
-
-	case tea.KeyMsg:
-		switch msg.String() {
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
 		case "enter":
 			if a.card.field != fieldDescription {
-				return a, a.saveCard()
+				a.saveCard()
+				return a, nil
 			}
+		case "ctrl+s":
+			a.saveCard()
+			return a, nil
 		case "esc":
-			a.mode = modeBoard
+			a.mode = a.card.returnTo
 			return a, nil
-		case "tab":
+		case "tab", "shift+tab":
+			step := cardField(1)
+			if key.String() == "shift+tab" {
+				step = fieldCount - 1
+			}
 			a.card.blurAll()
-			a.card.field = (a.card.field + 1) % fieldCount
-			a.card.focusCurrent()
-			return a, nil
-		case "shift+tab":
-			a.card.blurAll()
-			a.card.field = (a.card.field - 1 + fieldCount) % fieldCount
+			a.card.field = (a.card.field + step) % fieldCount
 			a.card.focusCurrent()
 			return a, nil
 		}
-
 		if a.card.field == fieldPriority {
-			switch msg.String() {
+			switch key.String() {
 			case "h", "left":
 				a.card.priority = a.card.priority.Prev()
-				return a, nil
 			case "l", "right":
 				a.card.priority = a.card.priority.Next()
-				return a, nil
 			}
+			return a, nil
 		}
 	}
 
@@ -400,7 +233,6 @@ func (a *App) updateCard(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case fieldDescription:
 		a.card.descInput, cmd = a.card.descInput.Update(msg)
 	}
-
 	return a, cmd
 }
 
@@ -424,184 +256,93 @@ func (c *cardModel) focusCurrent() {
 	}
 }
 
-func (a *App) saveCard() tea.Cmd {
-	title := strings.TrimSpace(a.card.titleInput.Value())
+func splitLabels(s string) []string {
+	var out []string
+	for _, l := range strings.Split(s, ",") {
+		if l = strings.TrimSpace(l); l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// saveCard writes the form. A new card is written in one step, fields and
+// all, so a failure never leaves half a card behind.
+func (a *App) saveCard() {
+	c := &a.card
+	title := strings.TrimSpace(c.titleInput.Value())
 	if title == "" {
-		a.card.err = fmt.Errorf("title cannot be empty")
-		return nil
+		a.err = fmt.Errorf("the title cannot be empty")
+		return
 	}
+	labels := strings.TrimSpace(c.labelsInput.Value())
+	externalID := strings.TrimSpace(c.externalIDInput.Value())
+	description := c.descInput.Value()
 
-	columnID := a.card.columnID
-	if a.card.colIndex < len(a.card.columns) {
-		columnID = a.card.columns[a.card.colIndex].ID
+	var saved *model.Card
+	if c.card == nil {
+		card, err := a.db.AddCard(c.boardID, c.lane, title, fstore.CardFields{
+			Description: description, Priority: string(c.priority), Labels: splitLabels(labels), ExternalID: externalID,
+		}, false)
+		if a.fail(err) {
+			return
+		}
+		saved = card
+		a.feedback = fmt.Sprintf("Added %q to %s", truncate(card.Title, 30), card.ColumnID)
+	} else {
+		card := *c.card
+		card.Title, card.Priority, card.Labels, card.ExternalID, card.Description = title, c.priority, labels, externalID, description
+		if a.fail(a.db.UpdateCard(&card)) {
+			return
+		}
+		saved = &card
+		a.feedback = fmt.Sprintf("Saved %q", truncate(card.Title, 30))
 	}
-
-	isNew := a.card.isNew
-	priority := a.card.priority
-	labels := strings.TrimSpace(a.card.labelsInput.Value())
-	externalID := strings.TrimSpace(a.card.externalIDInput.Value())
-	description := a.card.descInput.Value()
-
-	if !isNew {
-		card := *a.card.card
-		card.Title = title
-		card.ColumnID = columnID
-		card.Priority = priority
-		card.Labels = labels
-		card.ExternalID = externalID
-		card.Description = description
-
-		return func() tea.Msg {
-			if err := a.db.UpdateCard(&card); err != nil {
-				return errMsg{err}
-			}
-			return cardSavedMsg{&card}
-		}
+	a.mode = c.returnTo
+	a.loadBoard()
+	if a.mode == modeCardView {
+		a.cardView.card = saved
 	}
-
-	return func() tea.Msg {
-		card, err := a.db.CreateCard(columnID, title, priority)
-		if err != nil {
-			return errMsg{err}
+	for i, card := range a.focusedCards() {
+		if card.ID == saved.ID {
+			a.board.focusCard = i
 		}
-		card.Labels = labels
-		card.ExternalID = externalID
-		card.Description = description
-		if err := a.db.UpdateCard(card); err != nil {
-			return errMsg{err}
-		}
-		return cardSavedMsg{card}
 	}
 }
 
 func (a *App) viewCard() string {
-	w := a.width
-	if w == 0 {
-		w = 80
+	c := &a.card
+	header := " New Card "
+	if c.card != nil {
+		header = " Edit Card "
 	}
-	h := a.height
-	if h == 0 {
-		h = 24
-	}
-
-	header := "New Card"
-	if !a.card.isNew {
-		header = "Edit Card"
-	}
-
-	titleBar := titleBarStyle.Width(w).Render(fmt.Sprintf(" %s ", header))
-	statusBar := statusBarStyle.Width(w).Render(
-		" Tab/Shift+Tab: fields   h/l: cycle priority   Enter: save   Esc: cancel")
-
-	fw := a.card.formWidth
-	labelW := 14
-
-	fieldLabel := func(name string, active bool) string {
-		style := formLabelStyle.Width(labelW).Align(lipgloss.Right)
+	const labelW = 14
+	field := func(name string, active bool, value string) string {
+		style := formLabelStyle
 		if active {
-			style = formLabelActiveStyle.Width(labelW).Align(lipgloss.Right)
+			style = formLabelActiveStyle
 		}
-		return style.Render(name)
+		return lipgloss.JoinHorizontal(lipgloss.Top, style.Width(labelW).Align(lipgloss.Right).Render(name), "  ", value)
 	}
-
-	var rows []string
-
-	rows = append(rows,
-		lipgloss.JoinHorizontal(lipgloss.Top,
-			fieldLabel("Title", a.card.field == fieldTitle),
-			"  ",
-			a.card.titleInput.View(),
-		))
-
-	colName := ""
-	if a.card.colIndex < len(a.card.columns) {
-		colName = a.card.columns[a.card.colIndex].Name
+	prio := priorityStyle(string(c.priority)).Render(string(c.priority))
+	if c.field == fieldPriority {
+		prio += helpStyle.Render("  < h/l >")
 	}
-	rows = append(rows,
-		lipgloss.JoinHorizontal(lipgloss.Top,
-			fieldLabel("Column", false),
-			"  ",
-			formValueStyle.Render(colName),
-		))
-
-	active := a.card.field == fieldPriority
-	pStyle := priorityStyle(string(a.card.priority))
-	prioValue := pStyle.Render(string(a.card.priority))
-	if active {
-		prioValue += helpStyle.Render("  < h/l >")
-	}
-	rows = append(rows,
-		lipgloss.JoinHorizontal(lipgloss.Top,
-			fieldLabel("Priority", active),
-			"  ",
-			prioValue,
-		))
-
-	rows = append(rows,
-		lipgloss.JoinHorizontal(lipgloss.Top,
-			fieldLabel("Labels", a.card.field == fieldLabels),
-			"  ",
-			a.card.labelsInput.View(),
-		))
-
-	rows = append(rows,
-		lipgloss.JoinHorizontal(lipgloss.Top,
-			fieldLabel("External ID", a.card.field == fieldExternalID),
-			"  ",
-			a.card.externalIDInput.View(),
-		))
-
-	dialogH := h * 80 / 100
-	// border(2) + padding(2) + fields(5) + blank(1) = 10 lines overhead
-	descHeight := dialogH - 10
-	if a.card.card != nil {
-		descHeight -= 2 // blank + metadata
-	}
-	if a.card.err != nil {
-		descHeight -= 2 // blank + error
-	}
-	if descHeight < 4 {
-		descHeight = 4
-	}
-	a.card.descInput.SetHeight(descHeight)
-
-	rows = append(rows, "")
-	rows = append(rows,
-		lipgloss.JoinHorizontal(lipgloss.Top,
-			fieldLabel("Description", a.card.field == fieldDescription),
-			"  ",
-			a.card.descInput.View(),
-		))
-
-	if a.card.card != nil {
-		created := relativeTime(a.card.card.CreatedAt)
-		updated := relativeTime(a.card.card.UpdatedAt)
-		rows = append(rows, "")
-		meta := helpStyle.Render(fmt.Sprintf("Created: %s   Updated: %s", created, updated))
-		rows = append(rows,
-			lipgloss.JoinHorizontal(lipgloss.Top,
-				lipgloss.NewStyle().Width(labelW).Render(""),
-				"  ",
-				meta,
-			))
-	}
-
-	if a.card.err != nil {
-		rows = append(rows, "")
-		rows = append(rows,
-			lipgloss.JoinHorizontal(lipgloss.Top,
-				lipgloss.NewStyle().Width(labelW).Render(""),
-				"  ",
-				errorStyle.Render(fmt.Sprintf("! %s", a.card.err)),
-			))
-	}
-
-	form := lipgloss.JoinVertical(lipgloss.Left, rows...)
-
-	dialog := dialogBoxStyle.Width(fw).Height(dialogH).Render(form)
-
-	contentHeight := h - lipgloss.Height(titleBar) - lipgloss.Height(statusBar) - 1
-	content := lipgloss.Place(w, contentHeight, lipgloss.Center, lipgloss.Center, dialog)
-
-	return lipgloss.JoinVertical(lipgloss.Left, titleBar, content, statusBar)
+	hints := " Tab/Shift+Tab: fields   h/l: priority   Enter: save (Ctrl+S in the description)   Esc: cancel"
+	return a.frame(header, hints, nil, func(w, h int) string {
+		dialogH := max(12, h*90/100)
+		// The border and padding take 4 lines, the fields 5, the blank 1.
+		c.descInput.SetHeight(max(3, dialogH-10))
+		form := lipgloss.JoinVertical(lipgloss.Left,
+			field("Title", c.field == fieldTitle, c.titleInput.View()),
+			field("Column", false, formValueStyle.Render(c.lane)),
+			field("Priority", c.field == fieldPriority, prio),
+			field("Labels", c.field == fieldLabels, c.labelsInput.View()),
+			field("External ID", c.field == fieldExternalID, c.externalIDInput.View()),
+			"",
+			field("Description", c.field == fieldDescription, c.descInput.View()),
+		)
+		dialog := dialogBoxStyle.Width(min(c.formWidth, w)).MaxHeight(dialogH).Render(form)
+		return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, dialog)
+	})
 }

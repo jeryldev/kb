@@ -3,30 +3,11 @@ package tui
 import (
 	"strings"
 	"testing"
-	"time"
-	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/jeryldev/kb/internal/model"
 )
-
-func TestNoteListRowsFitTheWidthWithoutBreakingCharacters(t *testing.T) {
-	notes := []*model.Note{{
-		ID: "n1", Title: "日本語のとても長いタイトル — strategic foresight and scenario analysis notes",
-		Slug: "very-long-slug-for-a-very-long-title", Tags: "strategy,foresight,innovation", UpdatedAt: time.Now(),
-	}}
-	app := testNoteApp(notes)
-	app.width = 40
-	for _, line := range strings.Split(app.viewNoteList(), "\n") {
-		if !utf8.ValidString(line) {
-			t.Errorf("broken UTF-8: %q", line)
-		}
-		if w := ansi.StringWidth(line); w > 40 {
-			t.Errorf("line is %d cells wide: %q", w, line)
-		}
-	}
-}
 
 func TestWorkspaceRowsFitTheWidth(t *testing.T) {
 	app := &App{mode: modeWSContent, width: 50, height: 20}
@@ -64,13 +45,5 @@ func TestTextFieldsKeepFastTypingAndPastes(t *testing.T) {
 	board.updateBoardFiltering(paste)
 	if board.board.filterInput != "Q4 Offsite" {
 		t.Errorf("board filter = %q", board.board.filterInput)
-	}
-
-	notes := testNoteApp(testNotes())
-	notes.noteList.filtering = true
-	notes.updateNoteList(burst)
-	notes.updateNoteList(paste)
-	if notes.noteList.filterInput != "Q4 Offsite" {
-		t.Errorf("note filter = %q", notes.noteList.filterInput)
 	}
 }

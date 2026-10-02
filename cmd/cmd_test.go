@@ -3,31 +3,35 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jeryldev/kb/internal/fstore"
 	"github.com/jeryldev/kb/internal/model"
-	"github.com/jeryldev/kb/internal/store"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
 
+// setupTestDB opens a store on an empty vault, with the config and lock
+// directories in the test's temp dir too.
 func setupTestDB(t *testing.T) {
 	t.Helper()
-	testDB, err := store.OpenWithPath(":memory:", t.TempDir())
+	dir := t.TempDir()
+	testDB, err := fstore.Open(filepath.Join(dir, "vault"), fstore.Options{
+		ConfigDir: filepath.Join(dir, "config"),
+		LockDir:   filepath.Join(dir, "locks"),
+	})
 	if err != nil {
-		t.Fatalf("opening test db: %v", err)
+		t.Fatalf("opening test store: %v", err)
 	}
 	db = testDB
-	origPostRun := rootCmd.PersistentPostRunE
-	rootCmd.PersistentPostRunE = func(cmd *cobra.Command, args []string) error { return nil }
 	t.Cleanup(func() {
-		db.Close()
 		db = nil
-		rootCmd.PersistentPostRunE = origPostRun
+		boardFlag = ""
 	})
 }
 
@@ -65,11 +69,7 @@ func createTestBoard(t *testing.T, name string) {
 
 func testDefaultWorkspaceID(t *testing.T) string {
 	t.Helper()
-	ws, err := db.GetDefaultWorkspace()
-	if err != nil {
-		t.Fatalf("getting default workspace: %v", err)
-	}
-	return ws.ID
+	return db.DefaultWorkspace().ID
 }
 
 // --- Board tests ---
@@ -143,9 +143,9 @@ func TestCardsListJSON(t *testing.T) {
 	defer os.Unsetenv("KB_BOARD")
 
 	createTestBoard(t, "test-board")
-	columns, _ := db.ListColumns(mustBoardID(t, "test-board"))
-	db.CreateCard(columns[0].ID, "First card", "medium")
-	db.CreateCard(columns[0].ID, "Second card", "high")
+	columns := testLanes(t, "test-board")
+	createTestCard(t, columns[0], "First card", "medium")
+	createTestCard(t, columns[0], "Second card", "high")
 
 	out := executeCmd(t, "cards", "--json")
 
@@ -208,7 +208,7 @@ func TestCardsAddWithExtraFields(t *testing.T) {
 	if card.Description != "A detailed description" {
 		t.Errorf("expected description, got %q", card.Description)
 	}
-	if card.Labels != "bug,frontend" {
+	if strings.Join(card.Labels, ",") != "bug,frontend" {
 		t.Errorf("expected labels 'bug,frontend', got %q", card.Labels)
 	}
 	if card.ExternalID != "JIRA-123" {
@@ -222,8 +222,8 @@ func TestCardsShowJSON(t *testing.T) {
 	defer os.Unsetenv("KB_BOARD")
 
 	createTestBoard(t, "test-board")
-	columns, _ := db.ListColumns(mustBoardID(t, "test-board"))
-	card, _ := db.CreateCard(columns[1].ID, "Show me", "urgent")
+	columns := testLanes(t, "test-board")
+	card, _ := createTestCard(t, columns[1], "Show me", "urgent")
 
 	out := executeCmd(t, "cards", "show", card.ID[:8], "--json")
 
@@ -248,8 +248,8 @@ func TestCardsEditJSON(t *testing.T) {
 	defer os.Unsetenv("KB_BOARD")
 
 	createTestBoard(t, "test-board")
-	columns, _ := db.ListColumns(mustBoardID(t, "test-board"))
-	card, _ := db.CreateCard(columns[0].ID, "Original title", "medium")
+	columns := testLanes(t, "test-board")
+	card, _ := createTestCard(t, columns[0], "Original title", "medium")
 
 	out := executeCmd(t, "cards", "edit", card.ID[:8],
 		"-t", "Updated title",
@@ -274,8 +274,8 @@ func TestCardsEditPartial(t *testing.T) {
 	defer os.Unsetenv("KB_BOARD")
 
 	createTestBoard(t, "test-board")
-	columns, _ := db.ListColumns(mustBoardID(t, "test-board"))
-	card, _ := db.CreateCard(columns[0].ID, "Keep this title", "high")
+	columns := testLanes(t, "test-board")
+	card, _ := createTestCard(t, columns[0], "Keep this title", "high")
 	card.Labels = "original"
 	db.UpdateCard(card)
 
@@ -293,7 +293,7 @@ func TestCardsEditPartial(t *testing.T) {
 	if result.Priority != "high" {
 		t.Errorf("priority should be unchanged, got %q", result.Priority)
 	}
-	if result.Labels != "updated-label" {
+	if strings.Join(result.Labels, ",") != "updated-label" {
 		t.Errorf("expected labels 'updated-label', got %q", result.Labels)
 	}
 }
@@ -304,8 +304,8 @@ func TestCardsMoveJSON(t *testing.T) {
 	defer os.Unsetenv("KB_BOARD")
 
 	createTestBoard(t, "test-board")
-	columns, _ := db.ListColumns(mustBoardID(t, "test-board"))
-	card, _ := db.CreateCard(columns[0].ID, "Moving card", "medium")
+	columns := testLanes(t, "test-board")
+	card, _ := createTestCard(t, columns[0], "Moving card", "medium")
 
 	out := executeCmd(t, "cards", "move", card.ID[:8], "Done", "--json")
 
@@ -324,8 +324,8 @@ func TestCardsArchiveJSON(t *testing.T) {
 	defer os.Unsetenv("KB_BOARD")
 
 	createTestBoard(t, "test-board")
-	columns, _ := db.ListColumns(mustBoardID(t, "test-board"))
-	card, _ := db.CreateCard(columns[0].ID, "Archive me", "low")
+	columns := testLanes(t, "test-board")
+	card, _ := createTestCard(t, columns[0], "Archive me", "low")
 
 	out := executeCmd(t, "cards", "archive", card.ID[:8], "--json")
 
@@ -344,10 +344,10 @@ func TestCardsDeleteJSON(t *testing.T) {
 	defer os.Unsetenv("KB_BOARD")
 
 	createTestBoard(t, "test-board")
-	columns, _ := db.ListColumns(mustBoardID(t, "test-board"))
-	card, _ := db.CreateCard(columns[0].ID, "Delete me", "medium")
+	columns := testLanes(t, "test-board")
+	card, _ := createTestCard(t, columns[0], "Delete me", "medium")
 
-	out := executeCmd(t, "cards", "delete", card.ID[:8], "--json")
+	out := executeCmd(t, "cards", "delete", card.ID[:8], "--json", "-f")
 
 	var result cardJSON
 	if err := json.Unmarshal([]byte(out), &result); err != nil {
@@ -366,9 +366,9 @@ func TestColumnsListJSON(t *testing.T) {
 	defer os.Unsetenv("KB_BOARD")
 
 	createTestBoard(t, "test-board")
-	columns, _ := db.ListColumns(mustBoardID(t, "test-board"))
-	db.CreateCard(columns[0].ID, "Card 1", "medium")
-	db.CreateCard(columns[0].ID, "Card 2", "high")
+	columns := testLanes(t, "test-board")
+	createTestCard(t, columns[0], "Card 1", "medium")
+	createTestCard(t, columns[0], "Card 2", "high")
 
 	out := executeCmd(t, "columns", "--json")
 
@@ -472,12 +472,11 @@ func TestColumnsReorderJSON(t *testing.T) {
 	defer os.Unsetenv("KB_BOARD")
 
 	createTestBoard(t, "test-board")
-	boardID := mustBoardID(t, "test-board")
-	columns, _ := db.ListColumns(boardID)
+	columns := testLanes(t, "test-board")
 
 	reversed := make([]string, len(columns))
 	for i, col := range columns {
-		reversed[len(columns)-1-i] = col.ID
+		reversed[len(columns)-1-i] = col.Name
 	}
 	idStr := ""
 	for i, id := range reversed {
@@ -502,14 +501,37 @@ func TestColumnsReorderJSON(t *testing.T) {
 
 func mustBoardID(t *testing.T, name string) string {
 	t.Helper()
-	board, err := db.GetBoardByName(name)
+	board, err := db.GetBoard(name)
 	if err != nil {
 		t.Fatalf("getting board: %v", err)
 	}
-	if board == nil {
-		t.Fatalf("board %q not found", name)
-	}
 	return board.ID
+}
+
+// testLane is a board's lane, for adding cards to it.
+type testLane struct{ Board, Name string }
+
+func testLanes(t *testing.T, board string) []testLane {
+	t.Helper()
+	id := mustBoardID(t, board)
+	lanes, err := db.Lanes(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []testLane
+	for _, l := range lanes {
+		out = append(out, testLane{id, l.Name})
+	}
+	return out
+}
+
+func createTestCard(t *testing.T, lane testLane, title string, priority model.Priority) (*model.Card, error) {
+	t.Helper()
+	card, err := db.AddCard(lane.Board, lane.Name, title, fstore.CardFields{Priority: string(priority)}, true)
+	if err != nil {
+		t.Fatalf("adding card: %v", err)
+	}
+	return card, nil
 }
 
 func executeCmdErr(t *testing.T, args ...string) (string, error) {
@@ -534,6 +556,7 @@ func TestFormatTime(t *testing.T) {
 }
 
 func TestToBoardJSON(t *testing.T) {
+	setupTestDB(t)
 	now := time.Now().UTC()
 	b := &model.Board{
 		ID: "board-123", Name: "test", Description: "desc",
@@ -546,26 +569,24 @@ func TestToBoardJSON(t *testing.T) {
 }
 
 func TestToCardJSON(t *testing.T) {
-	now := time.Now().UTC()
+	setupTestDB(t)
 	c := &model.Card{
-		ID: "card-456", ColumnID: "col-1", Title: "Fix bug",
+		ID: "card-456", BoardID: "Boards/x.md", ColumnID: "Todo", Title: "Fix bug",
 		Description: "desc", Priority: model.PriorityHigh,
 		Labels: "bug", ExternalID: "EXT-1",
-		CreatedAt: now, UpdatedAt: now,
 	}
-	j := toCardJSON(c, "Todo")
+	j := toCardJSON(c)
 	if j.Column != "Todo" || j.Title != "Fix bug" || j.Priority != "high" {
 		t.Errorf("toCardJSON() fields mismatch: %+v", j)
 	}
-	if j.Labels != "bug" || j.ExternalID != "EXT-1" {
+	if strings.Join(j.Labels, ",") != "bug" || j.ExternalID != "EXT-1" {
 		t.Errorf("toCardJSON() extra fields mismatch: %+v", j)
 	}
 }
 
 func TestToColumnJSON(t *testing.T) {
 	limit := 5
-	col := &model.Column{ID: "col-1", Name: "Todo", Position: 1, WIPLimit: &limit}
-	j := toColumnJSON(col, 3)
+	j := toColumnJSON(fstore.Lane{Name: "Todo", Position: 1, WIPLimit: &limit, Cards: 3})
 	if j.Name != "Todo" || j.Position != 1 || j.Cards != 3 {
 		t.Errorf("toColumnJSON() fields mismatch: %+v", j)
 	}
@@ -575,8 +596,7 @@ func TestToColumnJSON(t *testing.T) {
 }
 
 func TestToColumnJSONNilWIPLimit(t *testing.T) {
-	col := &model.Column{ID: "col-1", Name: "Todo", Position: 0}
-	j := toColumnJSON(col, 0)
+	j := toColumnJSON(fstore.Lane{Name: "Todo"})
 	if j.WIPLimit != nil {
 		t.Errorf("expected nil WIPLimit, got %v", j.WIPLimit)
 	}
@@ -587,9 +607,9 @@ func TestResolveColumnByName(t *testing.T) {
 	createTestBoard(t, "test-board")
 	boardID := mustBoardID(t, "test-board")
 
-	col, err := resolveColumnByName(boardID, "todo")
+	col, err := resolveLane(boardID, "todo")
 	if err != nil {
-		t.Fatalf("resolveColumnByName() failed: %v", err)
+		t.Fatalf("resolveLane() failed: %v", err)
 	}
 	if col.Name != "Todo" {
 		t.Errorf("expected 'Todo', got %q", col.Name)
@@ -602,12 +622,12 @@ func TestResolveColumnByNameCaseInsensitive(t *testing.T) {
 	boardID := mustBoardID(t, "test-board")
 
 	for _, name := range []string{"IN PROGRESS", "in progress", "In Progress"} {
-		col, err := resolveColumnByName(boardID, name)
+		col, err := resolveLane(boardID, name)
 		if err != nil {
-			t.Fatalf("resolveColumnByName(%q) failed: %v", name, err)
+			t.Fatalf("resolveLane(%q) failed: %v", name, err)
 		}
 		if col.Name != "In Progress" {
-			t.Errorf("resolveColumnByName(%q) = %q, want 'In Progress'", name, col.Name)
+			t.Errorf("resolveLane(%q) = %q, want 'In Progress'", name, col.Name)
 		}
 	}
 }
@@ -617,7 +637,7 @@ func TestResolveColumnByNameNotFound(t *testing.T) {
 	createTestBoard(t, "test-board")
 	boardID := mustBoardID(t, "test-board")
 
-	_, err := resolveColumnByName(boardID, "Nonexistent")
+	_, err := resolveLane(boardID, "Nonexistent")
 	if err == nil {
 		t.Error("expected error for nonexistent column")
 	}
@@ -637,8 +657,8 @@ func TestBoardsListHuman(t *testing.T) {
 	if !strings.Contains(out, "my-project") {
 		t.Errorf("expected board name in output: %s", out)
 	}
-	if !strings.Contains(out, "ID") {
-		t.Errorf("expected ID column header in output: %s", out)
+	if !strings.Contains(out, "NAME") || !strings.Contains(out, "Boards/my-project.md") {
+		t.Errorf("expected the header and the board's file in output: %s", out)
 	}
 }
 
@@ -668,7 +688,7 @@ func TestBoardDeleteHumanForce(t *testing.T) {
 
 	out := executeCmd(t, "boards", "delete", "to-delete", "-f")
 
-	if !strings.Contains(out, "Deleted board") {
+	if !strings.Contains(out, "Moved board") || !strings.Contains(out, ".trash/Boards/to-delete.md") {
 		t.Errorf("expected deletion confirmation, got: %s", out)
 	}
 }
@@ -688,8 +708,8 @@ func TestCardsListHuman(t *testing.T) {
 	defer os.Unsetenv("KB_BOARD")
 
 	createTestBoard(t, "test-board")
-	columns, _ := db.ListColumns(mustBoardID(t, "test-board"))
-	db.CreateCard(columns[0].ID, "Test card", "high")
+	columns := testLanes(t, "test-board")
+	createTestCard(t, columns[0], "Test card", "high")
 
 	out := executeCmd(t, "cards")
 
@@ -751,8 +771,8 @@ func TestCardsShowHuman(t *testing.T) {
 	defer os.Unsetenv("KB_BOARD")
 
 	createTestBoard(t, "test-board")
-	columns, _ := db.ListColumns(mustBoardID(t, "test-board"))
-	card, _ := db.CreateCard(columns[0].ID, "Detailed card", "high")
+	columns := testLanes(t, "test-board")
+	card, _ := createTestCard(t, columns[0], "Detailed card", "high")
 	card.Description = "A long description"
 	card.ExternalID = "JIRA-100"
 	db.UpdateCard(card)
@@ -776,8 +796,8 @@ func TestCardsEditHuman(t *testing.T) {
 	defer os.Unsetenv("KB_BOARD")
 
 	createTestBoard(t, "test-board")
-	columns, _ := db.ListColumns(mustBoardID(t, "test-board"))
-	card, _ := db.CreateCard(columns[0].ID, "Old title", "medium")
+	columns := testLanes(t, "test-board")
+	card, _ := createTestCard(t, columns[0], "Old title", "medium")
 
 	out := executeCmd(t, "cards", "edit", card.ID[:8], "-t", "New title")
 
@@ -792,12 +812,12 @@ func TestCardsMoveHuman(t *testing.T) {
 	defer os.Unsetenv("KB_BOARD")
 
 	createTestBoard(t, "test-board")
-	columns, _ := db.ListColumns(mustBoardID(t, "test-board"))
-	card, _ := db.CreateCard(columns[0].ID, "Move me", "medium")
+	columns := testLanes(t, "test-board")
+	card, _ := createTestCard(t, columns[0], "Move me", "medium")
 
 	out := executeCmd(t, "cards", "move", card.ID[:8], "Done")
 
-	if !strings.Contains(out, "Moved card to Done") {
+	if !strings.Contains(out, `Moved card "Move me" to Done`) {
 		t.Errorf("expected move confirmation, got: %s", out)
 	}
 }
@@ -808,8 +828,8 @@ func TestCardsMoveCaseInsensitiveColumn(t *testing.T) {
 	defer os.Unsetenv("KB_BOARD")
 
 	createTestBoard(t, "test-board")
-	columns, _ := db.ListColumns(mustBoardID(t, "test-board"))
-	card, _ := db.CreateCard(columns[0].ID, "Move me", "medium")
+	columns := testLanes(t, "test-board")
+	card, _ := createTestCard(t, columns[0], "Move me", "medium")
 
 	out := executeCmd(t, "cards", "move", card.ID[:8], "done", "--json")
 
@@ -826,12 +846,12 @@ func TestCardsArchiveHuman(t *testing.T) {
 	defer os.Unsetenv("KB_BOARD")
 
 	createTestBoard(t, "test-board")
-	columns, _ := db.ListColumns(mustBoardID(t, "test-board"))
-	card, _ := db.CreateCard(columns[0].ID, "Archive me", "medium")
+	columns := testLanes(t, "test-board")
+	card, _ := createTestCard(t, columns[0], "Archive me", "medium")
 
 	out := executeCmd(t, "cards", "archive", card.ID[:8])
 
-	if !strings.Contains(out, "Card archived") {
+	if !strings.Contains(out, `Archived card "Archive me"`) {
 		t.Errorf("expected archive confirmation, got: %s", out)
 	}
 }
@@ -842,10 +862,10 @@ func TestCardsDeleteHuman(t *testing.T) {
 	defer os.Unsetenv("KB_BOARD")
 
 	createTestBoard(t, "test-board")
-	columns, _ := db.ListColumns(mustBoardID(t, "test-board"))
-	card, _ := db.CreateCard(columns[0].ID, "Delete me", "medium")
+	columns := testLanes(t, "test-board")
+	card, _ := createTestCard(t, columns[0], "Delete me", "medium")
 
-	out := executeCmd(t, "cards", "delete", card.ID[:8])
+	out := executeCmd(t, "cards", "delete", card.ID[:8], "-f")
 
 	if !strings.Contains(out, "Deleted card") {
 		t.Errorf("expected delete confirmation, got: %s", out)
@@ -888,10 +908,10 @@ func TestColumnsReorderHuman(t *testing.T) {
 	defer os.Unsetenv("KB_BOARD")
 
 	createTestBoard(t, "test-board")
-	columns, _ := db.ListColumns(mustBoardID(t, "test-board"))
+	columns := testLanes(t, "test-board")
 	ids := make([]string, len(columns))
 	for i, col := range columns {
-		ids[i] = col.ID
+		ids[i] = col.Name
 	}
 
 	out := executeCmd(t, "columns", "reorder", strings.Join(ids, ","))
@@ -1042,8 +1062,8 @@ func TestCardsEditAllFields(t *testing.T) {
 	defer os.Unsetenv("KB_BOARD")
 
 	createTestBoard(t, "test-board")
-	columns, _ := db.ListColumns(mustBoardID(t, "test-board"))
-	card, _ := db.CreateCard(columns[0].ID, "Original", "low")
+	columns := testLanes(t, "test-board")
+	card, _ := createTestCard(t, columns[0], "Original", "low")
 
 	out := executeCmd(t, "cards", "edit", card.ID[:8],
 		"-t", "New title",
@@ -1063,7 +1083,7 @@ func TestCardsEditAllFields(t *testing.T) {
 	if result.Description != "New desc" {
 		t.Errorf("description = %q, want 'New desc'", result.Description)
 	}
-	if result.Labels != "label1,label2" {
+	if strings.Join(result.Labels, ",") != "label1,label2" {
 		t.Errorf("labels = %q, want 'label1,label2'", result.Labels)
 	}
 	if result.Priority != "urgent" {
@@ -1100,8 +1120,8 @@ func TestCardIDFullMatch(t *testing.T) {
 	defer os.Unsetenv("KB_BOARD")
 
 	createTestBoard(t, "test-board")
-	columns, _ := db.ListColumns(mustBoardID(t, "test-board"))
-	card, _ := db.CreateCard(columns[0].ID, "Full ID test", "medium")
+	columns := testLanes(t, "test-board")
+	card, _ := createTestCard(t, columns[0], "Full ID test", "medium")
 
 	out := executeCmd(t, "cards", "show", card.ID, "--json")
 
@@ -1112,41 +1132,72 @@ func TestCardIDFullMatch(t *testing.T) {
 	}
 }
 
-// --- Board delete skips confirmation in JSON mode ---
+// --- Deletes ask first, --json or not; a script must say --force ---
 
-func TestBoardDeleteJSONSkipsConfirmation(t *testing.T) {
+func TestBoardDeleteNeedsForceWithoutATerminal(t *testing.T) {
 	setupTestDB(t)
+	createTestBoard(t, "keep-me")
 
-	createTestBoard(t, "auto-delete")
-
-	out := executeCmd(t, "boards", "delete", "auto-delete", "--json")
-
-	var board boardJSON
-	if err := json.Unmarshal([]byte(out), &board); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+	if _, err := executeCmdErr(t, "boards", "delete", "keep-me", "--json"); !errors.Is(err, errCancelled) {
+		t.Fatalf("err = %v, want cancelled", err)
 	}
-	if board.Name != "auto-delete" {
-		t.Errorf("expected name 'auto-delete', got %q", board.Name)
+	if _, err := db.GetBoard("keep-me"); err != nil {
+		t.Fatalf("the board should still be there: %v", err)
 	}
 }
 
-// --- Column delete skips confirmation in JSON mode ---
+func TestDeleteAsksOnStderrAndReadsTheAnswer(t *testing.T) {
+	setupTestDB(t)
+	createTestBoard(t, "doomed")
+	createTestBoard(t, "spared")
 
-func TestColumnDeleteJSONSkipsConfirmation(t *testing.T) {
+	stdout, stderr := new(bytes.Buffer), new(bytes.Buffer)
+	run := func(answer string, args ...string) error {
+		resetFlags(rootCmd)
+		stdout.Reset()
+		stderr.Reset()
+		rootCmd.SetOut(stdout)
+		rootCmd.SetErr(stderr)
+		rootCmd.SetIn(strings.NewReader(answer))
+		rootCmd.SetArgs(args)
+		defer rootCmd.SetIn(nil)
+		return rootCmd.Execute()
+	}
+
+	if err := run("n\n", "boards", "delete", "spared"); !errors.Is(err, errCancelled) {
+		t.Errorf("answering n: err = %v, want cancelled", err)
+	}
+	if !strings.Contains(stderr.String(), `Move board "spared"`) || strings.Contains(stdout.String(), "Move board") {
+		t.Errorf("the question belongs on stderr; stdout %q, stderr %q", stdout, stderr)
+	}
+	if err := run("y\n", "boards", "delete", "doomed", "--json"); err != nil {
+		t.Fatalf("answering y: %v", err)
+	}
+	var board boardJSON
+	if err := json.Unmarshal(stdout.Bytes(), &board); err != nil || board.Name != "doomed" {
+		t.Errorf("stdout should be just the JSON, got %q (%v)", stdout, err)
+	}
+	if _, err := db.GetBoard("doomed"); err == nil {
+		t.Error("the board should be gone")
+	}
+}
+
+func TestColumnDeleteArchivesItsCards(t *testing.T) {
 	setupTestDB(t)
 	os.Setenv("KB_BOARD", "test-board")
 	defer os.Unsetenv("KB_BOARD")
-
 	createTestBoard(t, "test-board")
+	columns := testLanes(t, "test-board")
+	card, _ := createTestCard(t, columns[3], "Under review", "")
 
-	out := executeCmd(t, "columns", "delete", "Review", "--json")
-
-	var col columnJSON
-	if err := json.Unmarshal([]byte(out), &col); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+	if _, err := executeCmdErr(t, "columns", "delete", "Review", "--json"); !errors.Is(err, errCancelled) {
+		t.Fatalf("err = %v, want cancelled", err)
 	}
-	if col.Name != "Review" {
-		t.Errorf("expected name 'Review', got %q", col.Name)
+	executeCmd(t, "columns", "delete", "Review", "-f")
+
+	archived, err := db.ArchivedCards(mustBoardID(t, "test-board"))
+	if err != nil || len(archived) != 1 || archived[0].ID != card.ID {
+		t.Errorf("archived = %v (%v), want the card", archived, err)
 	}
 }
 
@@ -1159,24 +1210,23 @@ func setupFilteredCards(t *testing.T) {
 	t.Cleanup(func() { os.Unsetenv("KB_BOARD") })
 
 	createTestBoard(t, "test-board")
-	boardID := mustBoardID(t, "test-board")
-	columns, _ := db.ListColumns(boardID)
+	columns := testLanes(t, "test-board")
 
-	c1, _ := db.CreateCard(columns[0].ID, "Auth login fix", model.PriorityHigh)
+	c1, _ := createTestCard(t, columns[0], "Auth login fix", model.PriorityHigh)
 	c1.Labels = "bug,backend"
 	c1.Description = "Fix the OAuth flow"
 	db.UpdateCard(c1)
 
-	c2, _ := db.CreateCard(columns[1].ID, "Dashboard redesign", model.PriorityMedium)
+	c2, _ := createTestCard(t, columns[1], "Dashboard redesign", model.PriorityMedium)
 	c2.Labels = "frontend"
 	c2.Description = "Update layout with auth token display"
 	db.UpdateCard(c2)
 
-	c3, _ := db.CreateCard(columns[1].ID, "Urgent hotfix", model.PriorityUrgent)
+	c3, _ := createTestCard(t, columns[1], "Urgent hotfix", model.PriorityUrgent)
 	c3.Labels = "bug"
 	db.UpdateCard(c3)
 
-	db.CreateCard(columns[2].ID, "Write tests", model.PriorityLow)
+	createTestCard(t, columns[2], "Write tests", model.PriorityLow)
 }
 
 func TestCardsFilterByPriority(t *testing.T) {
@@ -1383,7 +1433,7 @@ func TestNoteCreateWithFlags(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &note); err != nil {
 		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
 	}
-	if note.Tags != "go,pkm" {
+	if strings.Join(note.Tags, ",") != "go,pkm" {
 		t.Errorf("tags = %q, want 'go,pkm'", note.Tags)
 	}
 	if note.Slug != "custom-slug" {
@@ -1481,7 +1531,7 @@ func TestNoteEditJSON(t *testing.T) {
 	if note.Title != "Updated Title" {
 		t.Errorf("title = %q, want 'Updated Title'", note.Title)
 	}
-	if note.Tags != "updated" {
+	if strings.Join(note.Tags, ",") != "updated" {
 		t.Errorf("tags = %q, want 'updated'", note.Tags)
 	}
 }
@@ -1502,7 +1552,7 @@ func TestNoteEditPartial(t *testing.T) {
 	if note.Title != "Keep Title" {
 		t.Errorf("title should be unchanged, got %q", note.Title)
 	}
-	if note.Tags != "changed" {
+	if strings.Join(note.Tags, ",") != "changed" {
 		t.Errorf("tags = %q, want 'changed'", note.Tags)
 	}
 }
@@ -1512,7 +1562,7 @@ func TestNoteDeleteJSON(t *testing.T) {
 
 	executeCmd(t, "notes", "create", "Delete Me", "--json")
 
-	out := executeCmd(t, "notes", "delete", "delete-me", "--json")
+	out := executeCmd(t, "notes", "delete", "delete-me", "--json", "-f")
 
 	var note noteJSON
 	if err := json.Unmarshal([]byte(out), &note); err != nil {
@@ -1546,7 +1596,7 @@ func TestNoteCreateHuman(t *testing.T) {
 
 	out := executeCmd(t, "notes", "create", "My Note")
 
-	if !strings.Contains(out, "Created note") || !strings.Contains(out, "my-note") {
+	if !strings.Contains(out, "Created note") || !strings.Contains(out, "My Note.md") {
 		t.Errorf("expected creation confirmation, got: %s", out)
 	}
 }
@@ -1805,8 +1855,8 @@ func TestBoardMoveToWorkspaceJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &board); err != nil {
 		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
 	}
-	if board.WorkspaceID == "" {
-		t.Fatal("expected WorkspaceID to be set")
+	if board.Workspace != "Dev WS" {
+		t.Fatalf("workspace = %q, want Dev WS", board.Workspace)
 	}
 }
 
@@ -1895,8 +1945,8 @@ func TestWorkspaceShowWithContents(t *testing.T) {
 	if !strings.Contains(out, "ws-board") {
 		t.Errorf("expected board name in show output: %s", out)
 	}
-	if !strings.Contains(out, "ws-note") {
-		t.Errorf("expected note slug in show output: %s", out)
+	if !strings.Contains(out, "WS Note") {
+		t.Errorf("expected note title in show output: %s", out)
 	}
 }
 
@@ -1973,8 +2023,8 @@ func TestPublishSetupWithWorkspace(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &pt); err != nil {
 		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
 	}
-	if pt.WorkspaceID == nil {
-		t.Fatal("expected WorkspaceID to be set")
+	if pt.Workspace != "WS" {
+		t.Fatalf("workspace = %q, want WS", pt.Workspace)
 	}
 }
 
@@ -2048,12 +2098,12 @@ func TestPublishNoteJSON(t *testing.T) {
 
 	out := executeCmd(t, "publish", "my-blog-post", "--json")
 
-	var pl publishLogJSON
+	var pl publicationJSON
 	if err := json.Unmarshal([]byte(out), &pl); err != nil {
 		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
 	}
-	if pl.NoteSlug != "my-blog-post" {
-		t.Errorf("note_slug = %q, want 'my-blog-post'", pl.NoteSlug)
+	if pl.Note != "my-blog-post" {
+		t.Errorf("note = %q, want 'my-blog-post'", pl.Note)
 	}
 	if !strings.Contains(pl.FilePath, "my-blog-post.md") {
 		t.Errorf("file_path = %q, want to contain 'my-blog-post.md'", pl.FilePath)
@@ -2169,15 +2219,15 @@ func TestPublishListLogsJSON(t *testing.T) {
 
 	out := executeCmd(t, "publish", "list", "--target", "site", "--json")
 
-	var logs []publishLogJSON
+	var logs []publicationJSON
 	if err := json.Unmarshal([]byte(out), &logs); err != nil {
 		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
 	}
 	if len(logs) != 1 {
-		t.Fatalf("expected 1 log entry, got %d", len(logs))
+		t.Fatalf("expected 1 post, got %d", len(logs))
 	}
-	if logs[0].NoteSlug != "log-test" {
-		t.Errorf("note_slug = %q, want 'log-test'", logs[0].NoteSlug)
+	if logs[0].Note != "log-test" {
+		t.Errorf("note = %q, want 'log-test'", logs[0].Note)
 	}
 }
 
@@ -2236,7 +2286,7 @@ func TestPublishWithTargetFlag(t *testing.T) {
 
 	out := executeCmd(t, "publish", "multi-target", "--target", "site-2", "--json")
 
-	var pl publishLogJSON
+	var pl publicationJSON
 	if err := json.Unmarshal([]byte(out), &pl); err != nil {
 		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
 	}
@@ -2429,18 +2479,21 @@ func TestGraphWorkspaceNotFound(t *testing.T) {
 	}
 }
 
-func TestIndexReportsTheVaultAndRebuilds(t *testing.T) {
+func TestIndexReportsTheVault(t *testing.T) {
 	setupTestDB(t)
 	executeCmd(t, "notes", "create", "Indexed", "--json")
 	os.WriteFile(filepath.Join(db.Vault().Root(), "dropped.md"), []byte("from another editor"), 0o644)
 
 	out := executeCmd(t, "index")
-	if !strings.Contains(out, db.Vault().Root()) || !strings.Contains(out, "1 added") || !strings.Contains(out, "2 notes") {
+	if !strings.Contains(out, db.Vault().Root()) || !strings.Contains(out, "2 notes, 0 boards") {
 		t.Errorf("index output:\n%s", out)
 	}
-	out = executeCmd(t, "index", "--rebuild")
-	if !strings.Contains(out, "2 updated") {
-		t.Errorf("rebuild output:\n%s", out)
+	var report struct {
+		Notes    int      `json:"notes"`
+		Problems []string `json:"problems"`
+	}
+	if err := json.Unmarshal([]byte(executeCmd(t, "index", "--json")), &report); err != nil || report.Notes != 2 || report.Problems == nil {
+		t.Errorf("index --json = %+v (%v)", report, err)
 	}
 }
 
@@ -2483,7 +2536,7 @@ func TestDailyCreatesThenReopensTodaysNote(t *testing.T) {
 	if strings.Count(string(data), "- did a thing") != 2 {
 		t.Errorf("daily note:\n%s", data)
 	}
-	notes, _ := db.ListNotes()
+	notes := db.ListNotes()
 	if len(notes) != 1 || notes[0].Title != "2026-10-02" {
 		t.Errorf("notes = %+v", notes)
 	}
@@ -2498,7 +2551,7 @@ func TestRenameRewritesLinks(t *testing.T) {
 	executeCmd(t, "notes", "create", "Linker", "--body", "see [[Old Name]]", "--json")
 
 	out := executeCmd(t, "notes", "rename", "old-name", "New Name")
-	if !strings.Contains(out, "New Name") || !strings.Contains(out, "1 note") {
+	if !strings.Contains(out, "New Name") || !strings.Contains(out, "1 file") {
 		t.Errorf("output: %s", out)
 	}
 	linker, _ := db.GetNoteBySlug("linker")
@@ -2550,7 +2603,7 @@ func TestPublishDatesPostsByCreationAndLinksEarlierPosts(t *testing.T) {
 	root := db.Vault().Root()
 	os.WriteFile(filepath.Join(root, "Dual Transformation.md"), []byte("---\ncreated: 2026-05-13\n---\nThe book."), 0o644)
 	os.WriteFile(filepath.Join(root, "Offsite.md"), []byte("---\ncreated: 2026-06-02\n---\nRead [[dual transformation#Part 2|part two]] first."), 0o644)
-	if _, err := db.Scan(); err != nil {
+	if err := db.Reload(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2587,7 +2640,7 @@ func vaultNote(t *testing.T, rel, content string) {
 	if err := os.WriteFile(filepath.Join(db.Vault().Root(), rel), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Scan(); err != nil {
+	if err := db.Reload(); err != nil {
 		t.Fatal(err)
 	}
 }

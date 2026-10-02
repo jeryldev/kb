@@ -1,161 +1,96 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/jeryldev/kb/internal/fstore"
 	"github.com/jeryldev/kb/internal/model"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
-
-// --- Shared messages ---
-
-type errMsg struct {
-	err error
-}
-
-type boardCreatedMsg struct {
-	board *model.Board
-}
-
-type boardDeletedMsg struct {
-	workspaceID string
-}
 
 // --- Workspace picker (modePicker) ---
 
 type pickerModel struct {
 	workspaces []*model.Workspace
 	cursor     int
-	err        error
-	autoSelect bool
 }
 
-type workspacesLoadedMsg struct {
-	workspaces []*model.Workspace
-}
+func (a *App) initPicker() {
+	a.mode = modePicker
+	if !a.reload() {
+		return
+	}
+	a.picker.workspaces = a.db.ListWorkspaces()
+	a.picker.cursor = max(0, min(a.picker.cursor, len(a.picker.workspaces)-1))
 
-func (a *App) initPicker() tea.Cmd {
 	// The board named at start-up opens once; after that the picker is the
 	// picker, or "b" from that board would land straight back on it.
 	if name := a.boardName; name != "" {
 		a.boardName = ""
-		return func() tea.Msg {
-			board, err := a.db.GetBoardByName(name)
-			if err != nil {
-				return errMsg{err}
-			}
-			if board != nil {
-				return boardCreatedMsg{board}
-			}
-			workspaces, err := a.db.ListWorkspaces()
-			if err != nil {
-				return errMsg{err}
-			}
-			return workspacesLoadedMsg{workspaces}
-		}
-	}
-
-	return func() tea.Msg {
-		workspaces, err := a.db.ListWorkspaces()
+		board, err := a.db.GetBoard(name)
 		if err != nil {
-			return errMsg{err}
+			if !errors.Is(err, fstore.ErrNotFound) {
+				a.err = err
+			}
+			return
 		}
-		return workspacesLoadedMsg{workspaces}
+		if ws, err := a.db.GetWorkspace(board.WorkspaceID); err == nil {
+			a.wsContent = wsContentModel{workspace: ws}
+		}
+		a.switchToBoard(board)
 	}
 }
 
 func (a *App) updatePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case workspacesLoadedMsg:
-		a.picker.workspaces = msg.workspaces
-		if a.picker.cursor >= len(msg.workspaces) && len(msg.workspaces) > 0 {
-			a.picker.cursor = len(msg.workspaces) - 1
-		}
-		if len(msg.workspaces) == 1 && a.picker.autoSelect {
-			a.picker.autoSelect = false
-			return a, a.switchToWSContent(msg.workspaces[0])
-		}
-		a.picker.autoSelect = false
-
-	case boardCreatedMsg:
-		return a, a.switchToBoard(msg.board)
-
-	case errMsg:
-		a.picker.err = msg.err
-
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "j", "down":
-			if a.picker.cursor < len(a.picker.workspaces)-1 {
-				a.picker.cursor++
-			}
-		case "k", "up":
-			if a.picker.cursor > 0 {
-				a.picker.cursor--
-			}
-		case "enter":
-			if len(a.picker.workspaces) > 0 && a.picker.cursor < len(a.picker.workspaces) {
-				return a, a.switchToWSContent(a.picker.workspaces[a.picker.cursor])
-			}
-		case "q":
-			return a, tea.Quit
-		}
+	key, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return a, nil
 	}
-
+	switch key.String() {
+	case "j", "down":
+		if a.picker.cursor < len(a.picker.workspaces)-1 {
+			a.picker.cursor++
+		}
+	case "k", "up":
+		if a.picker.cursor > 0 {
+			a.picker.cursor--
+		}
+	case "enter":
+		if a.picker.cursor < len(a.picker.workspaces) {
+			a.switchToWSContent(a.picker.workspaces[a.picker.cursor])
+		}
+	case "q":
+		return a, tea.Quit
+	}
 	return a, nil
 }
 
 func (a *App) viewPicker() string {
-	w := a.width
-	if w == 0 {
-		w = 80
-	}
-	h := a.height
-	if h == 0 {
-		h = 24
-	}
-
-	titleBar := titleBarStyle.Width(w).Render(" kb: Select Workspace ")
-	statusBar := statusBarStyle.Width(w).Render(" j/k: select   enter: open   q: quit")
-
-	contentHeight := h - lipgloss.Height(titleBar) - lipgloss.Height(statusBar) - 1
-
-	var rows []string
-
-	if a.picker.err != nil {
-		rows = append(rows, errorStyle.Render(fmt.Sprintf("Error: %s", a.picker.err)))
-		rows = append(rows, "")
-	}
-
-	if len(a.picker.workspaces) == 0 {
-		rows = append(rows, helpStyle.Render("No workspaces found."))
-		dialog := dialogBoxStyle.Width(50).Render(lipgloss.JoinVertical(lipgloss.Left, rows...))
-		content := lipgloss.Place(w, contentHeight, lipgloss.Center, lipgloss.Center, dialog)
-		return lipgloss.JoinVertical(lipgloss.Left, titleBar, content, statusBar)
-	}
-
-	for i, ws := range a.picker.workspaces {
-		cursor := "  "
-		style := formValueStyle
-		if i == a.picker.cursor {
-			cursor = "▸ "
-			style = formLabelActiveStyle
+	return a.frame(" kb: Select Workspace ", " j/k: select   enter: open   q: quit", nil, func(w, h int) string {
+		var rows []string
+		var heights []int
+		for i, ws := range a.picker.workspaces {
+			cursor, style := "  ", formValueStyle
+			if i == a.picker.cursor {
+				cursor, style = "▸ ", formLabelActiveStyle
+			}
+			line := cursor + style.Render(ws.Name) + " " + helpStyle.Render(fmt.Sprintf("(%s)", ws.Kind))
+			if ws.Description != "" {
+				line += helpStyle.Render("  " + truncate(ws.Description, 40))
+			}
+			rows = append(rows, ansi.Truncate(line, 54, "…"))
+			heights = append(heights, 1)
 		}
-		badge := helpStyle.Render(fmt.Sprintf("(%s)", ws.Kind))
-		line := fmt.Sprintf("%s%s %s", cursor, style.Render(ws.Name), badge)
-		if ws.Description != "" {
-			line += helpStyle.Render(fmt.Sprintf("  %s", truncate(ws.Description, 40)))
-		}
-		rows = append(rows, line)
-	}
-
-	dialog := dialogBoxStyle.Width(60).Render(lipgloss.JoinVertical(lipgloss.Left, rows...))
-	content := lipgloss.Place(w, contentHeight, lipgloss.Center, lipgloss.Center, dialog)
-	return lipgloss.JoinVertical(lipgloss.Left, titleBar, content, statusBar)
+		// The dialog's border and padding take 4 lines.
+		start, end := window(heights, a.picker.cursor, max(1, h-4))
+		dialog := dialogBoxStyle.Width(min(60, w)).Render(lipgloss.JoinVertical(lipgloss.Left, rows[start:end]...))
+		return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, dialog)
+	})
 }
 
 // --- Workspace content (modeWSContent) ---
@@ -165,36 +100,12 @@ type wsContentModel struct {
 	boards     []*model.Board
 	notes      []*model.Note
 	cursor     int
-	creating   string
+	creating   string // "board" or "note" while a name is typed
 	input      string
-	confirming string
-	err        error
-	feedback   string
+	confirming bool
 }
 
-type noteCreatedMsg struct {
-	note *model.Note
-}
-
-type noteDeletedMsg struct {
-	workspaceID string
-}
-
-type wsContentLoadedMsg struct {
-	boards []*model.Board
-	notes  []*model.Note
-}
-
-func (m *wsContentModel) totalItems() int {
-	return len(m.boards) + len(m.notes)
-}
-
-func (m *wsContentModel) selectedKind() string {
-	if m.cursor < len(m.boards) {
-		return "board"
-	}
-	return "note"
-}
+func (m *wsContentModel) totalItems() int { return len(m.boards) + len(m.notes) }
 
 func (m *wsContentModel) selectedBoard() *model.Board {
 	if m.cursor < len(m.boards) {
@@ -204,316 +115,227 @@ func (m *wsContentModel) selectedBoard() *model.Board {
 }
 
 func (m *wsContentModel) selectedNote() *model.Note {
-	idx := m.cursor - len(m.boards)
-	if idx >= 0 && idx < len(m.notes) {
-		return m.notes[idx]
+	if i := m.cursor - len(m.boards); i >= 0 && i < len(m.notes) {
+		return m.notes[i]
 	}
 	return nil
 }
 
-func (a *App) switchToWSContent(ws *model.Workspace) tea.Cmd {
+// switchToWSContent shows a workspace's boards and notes, as they are on
+// disk now. Coming back to the same workspace keeps the cursor.
+func (a *App) switchToWSContent(ws *model.Workspace) {
 	a.mode = modeWSContent
-	a.wsContent = wsContentModel{workspace: ws}
-	return a.loadWSContent(ws.ID)
+	if a.wsContent.workspace == nil || a.wsContent.workspace.ID != ws.ID {
+		a.wsContent = wsContentModel{workspace: ws}
+	}
+	a.wsContent.creating, a.wsContent.confirming = "", false
+	a.loadWSContent()
 }
 
-func (a *App) loadWSContent(workspaceID string) tea.Cmd {
-	return func() tea.Msg {
-		boards, err := a.db.ListBoardsByWorkspace(workspaceID)
-		if err != nil {
-			return errMsg{err}
-		}
-		notes, err := a.db.ListNotesByWorkspace(workspaceID)
-		if err != nil {
-			return errMsg{err}
-		}
-		return wsContentLoadedMsg{boards: boards, notes: notes}
+func (a *App) loadWSContent() {
+	m := &a.wsContent
+	if !a.reload() {
+		return
 	}
+	if fresh, err := a.db.GetWorkspace(m.workspace.ID); err == nil {
+		m.workspace = fresh
+	}
+	m.boards = nil
+	for _, b := range a.db.ListBoards() {
+		if b.WorkspaceID == m.workspace.ID {
+			m.boards = append(m.boards, b)
+		}
+	}
+	m.notes = a.db.ListNotesByWorkspace(m.workspace.ID)
+	m.cursor = max(0, min(m.cursor, m.totalItems()-1))
 }
 
 func (a *App) updateWSContent(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case wsContentLoadedMsg:
-		a.wsContent.boards = msg.boards
-		a.wsContent.notes = msg.notes
-		if a.wsContent.cursor >= a.wsContent.totalItems() && a.wsContent.totalItems() > 0 {
-			a.wsContent.cursor = a.wsContent.totalItems() - 1
-		}
-
-	case boardCreatedMsg:
-		return a, a.switchToBoard(msg.board)
-
-	case boardDeletedMsg:
-		a.wsContent.feedback = "Board deleted"
-		return a, a.loadWSContent(msg.workspaceID)
-
-	case errMsg:
-		a.wsContent.err = msg.err
-
-	case noteCreatedMsg:
-		a.wsContent.feedback = fmt.Sprintf("Note %q created", msg.note.Title)
-		return a, a.loadWSContent(a.wsContent.workspace.ID)
-
-	case noteDeletedMsg:
-		a.wsContent.feedback = "Note deleted"
-		return a, a.loadWSContent(msg.workspaceID)
-
-	case tea.KeyMsg:
-		a.wsContent.feedback = ""
-
-		if a.wsContent.creating != "" {
-			return a.updateWSContentCreating(msg)
-		}
-
-		if a.wsContent.confirming != "" {
-			return a.updateWSContentConfirming(msg)
-		}
-
-		total := a.wsContent.totalItems()
-
-		switch msg.String() {
-		case "j", "down":
-			if a.wsContent.cursor < total-1 {
-				a.wsContent.cursor++
-			}
-		case "k", "up":
-			if a.wsContent.cursor > 0 {
-				a.wsContent.cursor--
-			}
-		case "enter":
-			if total > 0 {
-				if a.wsContent.selectedKind() == "board" {
-					return a, a.switchToBoard(a.wsContent.selectedBoard())
-				}
-				return a, a.switchToNoteView(a.wsContent.selectedNote())
-			}
-		case "n":
-			a.wsContent.creating = "board"
-			a.wsContent.input = ""
-		case "N":
-			a.wsContent.creating = "note"
-			a.wsContent.input = ""
-		case "d", "D":
-			if total > 0 {
-				a.wsContent.confirming = "delete"
-			}
-		case "b", "esc":
-			a.mode = modePicker
-			return a, a.initPicker()
-		case "q":
-			return a, tea.Quit
-		}
+	key, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return a, nil
 	}
-
+	m := &a.wsContent
+	if m.creating != "" {
+		return a.updateWSContentCreating(key)
+	}
+	if m.confirming {
+		m.confirming = false
+		if isYes(key) {
+			a.deleteSelectedItem()
+		}
+		return a, nil
+	}
+	switch key.String() {
+	case "j", "down":
+		if m.cursor < m.totalItems()-1 {
+			m.cursor++
+		}
+	case "k", "up":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "enter":
+		if b := m.selectedBoard(); b != nil {
+			a.switchToBoard(b)
+		} else if n := m.selectedNote(); n != nil {
+			a.switchToNoteView(n.ID)
+		}
+	case "n":
+		m.creating, m.input = "board", ""
+	case "N":
+		m.creating, m.input = "note", ""
+	case "d", "D":
+		m.confirming = m.totalItems() > 0
+	case "b", "esc":
+		a.initPicker()
+	case "q":
+		return a, tea.Quit
+	}
 	return a, nil
 }
 
-func (a *App) updateWSContentCreating(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
+func isYes(key tea.KeyMsg) bool { return key.String() == "y" || key.String() == "Y" }
+
+// deleteSelectedItem moves the selected board or note to the vault's trash.
+func (a *App) deleteSelectedItem() {
+	var dest string
+	var err error
+	if b := a.wsContent.selectedBoard(); b != nil {
+		dest, err = a.db.TrashBoard(b.ID)
+	} else if n := a.wsContent.selectedNote(); n != nil {
+		dest, err = a.db.TrashNote(n.ID)
+	} else {
+		return
+	}
+	if a.fail(err) {
+		return
+	}
+	a.loadWSContent()
+	a.feedback = "Moved to " + dest
+}
+
+func (a *App) updateWSContentCreating(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m := &a.wsContent
+	switch key.String() {
 	case "enter":
-		name := strings.TrimSpace(a.wsContent.input)
+		name := strings.TrimSpace(m.input)
+		kind := m.creating
+		m.creating = ""
 		if name == "" {
-			a.wsContent.creating = ""
 			return a, nil
 		}
-		kind := a.wsContent.creating
-		a.wsContent.creating = ""
-		wsID := a.wsContent.workspace.ID
 		if kind == "note" {
-			slug := model.Slugify(name)
-			return a, func() tea.Msg {
-				note, err := a.db.CreateNote(name, slug, "", wsID)
-				if err != nil {
-					return errMsg{err}
-				}
-				return noteCreatedMsg{note}
-			}
-		}
-		return a, func() tea.Msg {
-			board, err := a.db.CreateBoard(name, "", wsID)
-			if err != nil {
-				return errMsg{err}
-			}
-			return boardCreatedMsg{board}
-		}
-	case "esc":
-		a.wsContent.creating = ""
-	case "backspace":
-		if len(a.wsContent.input) > 0 {
-			runes := []rune(a.wsContent.input)
-			a.wsContent.input = string(runes[:len(runes)-1])
-		}
-	default:
-		if text, ok := typedText(msg); ok {
-			a.wsContent.input += text
-		}
-	}
-	return a, nil
-}
-
-func (a *App) updateWSContentConfirming(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "y", "Y":
-		a.wsContent.confirming = ""
-		wsID := a.wsContent.workspace.ID
-		if a.wsContent.selectedKind() == "board" {
-			board := a.wsContent.selectedBoard()
-			if board == nil {
+			note, err := a.db.CreateNote(name, "", "", m.workspace.ID)
+			if a.fail(err) {
 				return a, nil
 			}
-			return a, func() tea.Msg {
-				if err := a.db.DeleteBoard(board.ID); err != nil {
-					return errMsg{err}
-				}
-				return boardDeletedMsg{workspaceID: wsID}
-			}
-		}
-		note := a.wsContent.selectedNote()
-		if note == nil {
+			a.loadWSContent()
+			a.feedback = fmt.Sprintf("Created %s", note.Path)
 			return a, nil
 		}
-		return a, func() tea.Msg {
-			if err := a.db.DeleteNote(note.ID); err != nil {
-				return errMsg{err}
-			}
-			return noteDeletedMsg{workspaceID: wsID}
+		board, err := a.db.CreateBoard(name, "", m.workspace.ID)
+		if a.fail(err) {
+			return a, nil
+		}
+		a.switchToBoard(board)
+	case "esc":
+		m.creating = ""
+	case "backspace":
+		if runes := []rune(m.input); len(runes) > 0 {
+			m.input = string(runes[:len(runes)-1])
 		}
 	default:
-		a.wsContent.confirming = ""
+		if text, ok := typedText(key); ok {
+			m.input += text
+		}
 	}
 	return a, nil
 }
 
-func (a *App) switchToBoard(board *model.Board) tea.Cmd {
+func (a *App) switchToBoard(board *model.Board) {
 	a.mode = modeBoard
-	a.board = boardModel{
-		board: board,
-	}
-	return a.loadBoard()
+	a.board = boardModel{board: board}
+	a.loadBoard()
 }
 
 func (a *App) viewWSContent() string {
-	w := a.width
-	if w == 0 {
-		w = 80
-	}
-	h := a.height
-	if h == 0 {
-		h = 24
-	}
-
-	ws := a.wsContent.workspace
-	titleBar := titleBarStyle.Width(w).Render(fmt.Sprintf(" kb: %s (%s) ", ws.Name, ws.Kind))
-	statusBar := statusBarStyle.Width(w).Render(" j/k: select   enter: open   n: new board   N: new note   d: delete   b: back   q: quit")
-
-	contentHeight := h - lipgloss.Height(titleBar) - lipgloss.Height(statusBar) - 1
-
-	if a.wsContent.err != nil {
-		content := errorStyle.Render(fmt.Sprintf("Error: %v", a.wsContent.err))
-		return lipgloss.JoinVertical(lipgloss.Left, titleBar, content, statusBar)
-	}
-
-	if a.wsContent.creating != "" {
-		label := "New board name:"
-		if a.wsContent.creating == "note" {
-			label = "New note title:"
+	m := &a.wsContent
+	ws := m.workspace
+	title := fmt.Sprintf(" kb: %s (%s) ", ws.Name, ws.Kind)
+	hints := " j/k: select   enter: open   n: new board   N: new note   d: delete   b: back   q: quit"
+	return a.frame(title, hints, nil, func(w, h int) string {
+		if m.creating != "" {
+			label := "New board name:"
+			if m.creating == "note" {
+				label = "New note title:"
+			}
+			dialog := dialogBoxStyle.Width(min(50, w)).Render(lipgloss.JoinVertical(lipgloss.Left,
+				formLabelActiveStyle.Render(label), "", "  "+m.input+"█", "",
+				helpStyle.Render("  enter: create   esc: cancel")))
+			return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, dialog)
 		}
+		if m.confirming {
+			prompt := ""
+			if b := m.selectedBoard(); b != nil {
+				prompt = fmt.Sprintf("Move board %q to the trash?", b.Name)
+			} else if n := m.selectedNote(); n != nil {
+				prompt = fmt.Sprintf("Move note %q to the trash?", n.Title)
+			}
+			return renderCenteredConfirm(w, h, prompt)
+		}
+		if m.totalItems() == 0 {
+			return lipgloss.NewStyle().Padding(1, 2).Render(emptyColumnStyle.Render("No boards or notes in this workspace.") +
+				"\n\n" + helpStyle.Render("Press n to create a board, N a note."))
+		}
+
+		// Each item is one row; the section headings are rows too, and
+		// belong to the item below them so they scroll with it.
 		var rows []string
-		rows = append(rows, formLabelActiveStyle.Render(label))
-		rows = append(rows, "")
-		rows = append(rows, fmt.Sprintf("  %s█", a.wsContent.input))
-		rows = append(rows, "")
-		rows = append(rows, helpStyle.Render("  enter: create   esc: cancel"))
-
-		dialog := dialogBoxStyle.Width(50).Render(lipgloss.JoinVertical(lipgloss.Left, rows...))
-		content := lipgloss.Place(w, contentHeight, lipgloss.Center, lipgloss.Center, dialog)
-		return lipgloss.JoinVertical(lipgloss.Left, titleBar, content, statusBar)
-	}
-
-	if a.wsContent.confirming != "" {
-		var prompt string
-		if a.wsContent.selectedKind() == "board" {
-			board := a.wsContent.selectedBoard()
-			name := ""
-			if board != nil {
-				name = board.Name
+		var heights []int
+		item := func(i int, name, extra string) string {
+			cursor, style := "  ", formValueStyle
+			if i == m.cursor {
+				cursor, style = "▸ ", formLabelActiveStyle
 			}
-			prompt = fmt.Sprintf("Delete board %q?", name)
-		} else {
-			note := a.wsContent.selectedNote()
-			name := ""
-			if note != nil {
-				name = note.Title
-			}
-			prompt = fmt.Sprintf("Delete note %q?", name)
+			return cursor + style.Render(name) + extra
 		}
-		content := renderCenteredConfirm(w, contentHeight, prompt)
-		return lipgloss.JoinVertical(lipgloss.Left, titleBar, content, statusBar)
-	}
-
-	var rows []string
-	idx := 0
-
-	// Boards section
-	if len(a.wsContent.boards) > 0 {
-		rows = append(rows, lipgloss.NewStyle().Bold(true).Underline(true).Render("Boards"))
-		for _, board := range a.wsContent.boards {
-			cursor := "  "
-			style := formValueStyle
-			if idx == a.wsContent.cursor {
-				cursor = "▸ "
-				style = formLabelActiveStyle
+		heading := func(s string) string { return lipgloss.NewStyle().Bold(true).Underline(true).Render(s) }
+		for i, b := range m.boards {
+			row := item(i, b.Name, helpStyle.Render("  "+truncate(b.Description, 30)))
+			if i == 0 {
+				row = heading("Boards") + "\n" + row
 			}
-			line := fmt.Sprintf("%s%s", cursor, style.Render(board.Name))
-			if board.Description != "" {
-				line += helpStyle.Render("  " + truncate(board.Description, 30))
-			}
-			rows = append(rows, line)
-			idx++
+			rows = append(rows, row)
 		}
-	}
-
-	// Notes section
-	if len(a.wsContent.notes) > 0 {
-		if len(a.wsContent.boards) > 0 {
-			rows = append(rows, "")
-		}
-		rows = append(rows, lipgloss.NewStyle().Bold(true).Underline(true).Render("Notes"))
-		for _, note := range a.wsContent.notes {
-			cursor := "  "
-			style := formValueStyle
-			if idx == a.wsContent.cursor {
-				cursor = "▸ "
-				style = formLabelActiveStyle
+		for i, n := range m.notes {
+			extra := ""
+			if tags := n.TagList(); len(tags) > 0 {
+				extra = "  " + labelStyle.Render("#"+strings.Join(tags, " #"))
 			}
-			slug := helpStyle.Render(note.Slug)
-			tags := ""
-			if note.Tags != "" {
-				tags = "  " + labelStyle.Render("["+note.Tags+"]")
+			row := item(len(m.boards)+i, n.Title, extra)
+			if i == 0 {
+				row = heading("Notes") + "\n" + row
+				if len(m.boards) > 0 {
+					row = "\n" + row
+				}
 			}
-			line := fmt.Sprintf("%s%s  %s%s", cursor, style.Render(note.Title), slug, tags)
-			rows = append(rows, line)
-			idx++
+			rows = append(rows, row)
 		}
-	}
-
-	if len(a.wsContent.boards) == 0 && len(a.wsContent.notes) == 0 {
-		rows = append(rows, emptyColumnStyle.Render("No boards or notes in this workspace."))
-		rows = append(rows, "")
-		rows = append(rows, helpStyle.Render("Press n to create a board."))
-	}
-
-	if a.wsContent.feedback != "" {
-		rows = append(rows, "")
-		rows = append(rows, helpStyle.Render(a.wsContent.feedback))
-	}
-
-	// One long row would widen the whole view past the terminal, title bar
-	// and all, so each row is cut to the space inside the padding.
-	for i, row := range rows {
-		rows[i] = ansi.Truncate(row, max(1, w-4), "…")
-	}
-	content := lipgloss.JoinVertical(lipgloss.Left, rows...)
-	padded := lipgloss.NewStyle().Padding(1, 2).Height(contentHeight).Render(content)
-	return lipgloss.JoinVertical(lipgloss.Left, titleBar, padded, statusBar)
+		for _, row := range rows {
+			heights = append(heights, strings.Count(row, "\n")+1)
+		}
+		// Padding takes 2 lines.
+		start, end := window(heights, m.cursor, max(1, h-2))
+		var lines []string
+		for _, row := range rows[start:end] {
+			for _, line := range strings.Split(row, "\n") {
+				// One long row would widen the whole view past the terminal,
+				// title bar and all, so each is cut to the space inside the
+				// padding.
+				lines = append(lines, ansi.Truncate(line, max(1, w-4), "…"))
+			}
+		}
+		return lipgloss.NewStyle().Padding(1, 2).Render(strings.Join(lines, "\n"))
+	})
 }

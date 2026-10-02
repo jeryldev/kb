@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -9,348 +10,105 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/jeryldev/kb/internal/editor"
+	"github.com/jeryldev/kb/internal/fstore"
 	"github.com/jeryldev/kb/internal/model"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-type noteListModel struct {
-	notes       []*model.Note
-	cursor      int
-	filter      string
-	filterInput string
-	filtering   bool
-	err         error
-}
-
-type backlinkDisplay struct {
-	label   string
-	context string
-}
-
 type noteViewModel struct {
 	note       *model.Note
-	backlinks  []backlinkDisplay
+	backlinks  []fstore.Backlink
 	scroll     int
-	confirming string
+	confirming bool
 }
 
-type notesLoadedMsg struct {
-	notes []*model.Note
-}
-
-type noteBacklinksMsg struct {
-	note      *model.Note
-	backlinks []backlinkDisplay
-}
-
+// noteEditedMsg arrives when the editor opened on a note exits.
 type noteEditedMsg struct {
-	note *model.Note
+	noteID string
+	err    error
 }
 
-func (a *App) switchToNoteView(note *model.Note) tea.Cmd {
+// switchToNoteView shows a note as its file is now.
+func (a *App) switchToNoteView(noteID string) {
+	if !a.reload() {
+		return
+	}
+	note, err := a.db.GetNote(noteID)
+	if a.fail(err) {
+		return
+	}
 	a.mode = modeNoteView
-	a.noteView = noteViewModel{note: note}
-	return func() tea.Msg {
-		links, err := a.db.GetBacklinks("note", note.ID)
-		if err != nil {
-			return errMsg{err}
-		}
-		var blds []backlinkDisplay
-		for _, bl := range links {
-			label := bl.SourceID[:min(8, len(bl.SourceID))]
-			sourceNote, err := a.db.GetNote(bl.SourceID)
-			if err == nil && sourceNote != nil {
-				label = fmt.Sprintf("[[%s]] %s", sourceNote.Slug, sourceNote.Title)
-			}
-			blds = append(blds, backlinkDisplay{label: label, context: bl.Context})
-		}
-		return noteBacklinksMsg{note: note, backlinks: blds}
+	scroll := 0
+	if a.noteView.note != nil && a.noteView.note.ID == noteID {
+		scroll = a.noteView.scroll
 	}
+	a.noteView = noteViewModel{note: note, backlinks: a.db.Backlinks(noteID), scroll: scroll}
 }
-
-// --- Note List Mode ---
-
-func (a *App) updateNoteList(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case notesLoadedMsg:
-		a.noteList.notes = msg.notes
-		if a.noteList.cursor >= len(msg.notes) && len(msg.notes) > 0 {
-			a.noteList.cursor = len(msg.notes) - 1
-		}
-
-	case errMsg:
-		a.noteList.err = msg.err
-
-	case tea.KeyMsg:
-		if a.noteList.filtering {
-			return a.updateNoteListFiltering(msg)
-		}
-
-		switch msg.String() {
-		case "q":
-			return a, tea.Quit
-		case "b", "esc":
-			if a.wsContent.workspace != nil {
-				return a, a.switchToWSContent(a.wsContent.workspace)
-			}
-			a.mode = modePicker
-			return a, a.initPicker()
-		case "j", "down":
-			notes := a.filteredNotes()
-			if a.noteList.cursor < len(notes)-1 {
-				a.noteList.cursor++
-			}
-		case "k", "up":
-			if a.noteList.cursor > 0 {
-				a.noteList.cursor--
-			}
-		case "enter":
-			notes := a.filteredNotes()
-			if len(notes) > 0 && a.noteList.cursor < len(notes) {
-				return a, a.switchToNoteView(notes[a.noteList.cursor])
-			}
-		case "/":
-			a.noteList.filtering = true
-			a.noteList.filterInput = a.noteList.filter
-		}
-	}
-	return a, nil
-}
-
-func (a *App) updateNoteListFiltering(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "enter":
-		a.noteList.filter = a.noteList.filterInput
-		a.noteList.filtering = false
-		a.noteList.cursor = 0
-	case "esc":
-		a.noteList.filter = ""
-		a.noteList.filterInput = ""
-		a.noteList.filtering = false
-		a.noteList.cursor = 0
-	case "backspace":
-		if len(a.noteList.filterInput) > 0 {
-			runes := []rune(a.noteList.filterInput)
-			a.noteList.filterInput = string(runes[:len(runes)-1])
-		}
-	default:
-		if text, ok := typedText(msg); ok {
-			a.noteList.filterInput += text
-		}
-	}
-	return a, nil
-}
-
-func (a *App) filteredNotes() []*model.Note {
-	if a.noteList.filter == "" {
-		return a.noteList.notes
-	}
-	f := strings.ToLower(a.noteList.filter)
-	var result []*model.Note
-	for _, n := range a.noteList.notes {
-		if strings.Contains(strings.ToLower(n.Title), f) ||
-			strings.Contains(strings.ToLower(n.Slug), f) ||
-			strings.Contains(strings.ToLower(n.Tags), f) {
-			result = append(result, n)
-		}
-	}
-	return result
-}
-
-func (a *App) viewNoteList() string {
-	w := a.width
-	if w == 0 {
-		w = 80
-	}
-	h := a.height
-	if h == 0 {
-		h = 24
-	}
-
-	titleBar := titleBarStyle.Width(w).Render(" Notes ")
-
-	statusHints := "j/k: navigate   Enter: view   /: filter   b: back   q: quit"
-	statusBar := statusBarStyle.Width(w).Render(" " + statusHints)
-
-	var filterBar string
-	if a.noteList.filtering {
-		filterBar = filterBarStyle.Render("Filter: " + a.noteList.filterInput + "█")
-	} else if a.noteList.filter != "" {
-		filterBar = filterBarStyle.Render("Filter: " + a.noteList.filter + "  (/ to edit, Esc to clear)")
-	}
-
-	notes := a.filteredNotes()
-
-	contentH := h - lipgloss.Height(titleBar) - lipgloss.Height(statusBar) - 1
-	if filterBar != "" {
-		contentH -= lipgloss.Height(filterBar) + 1
-	}
-
-	if a.noteList.err != nil {
-		content := errorStyle.Render(fmt.Sprintf("Error: %v", a.noteList.err))
-		return a.noteListLayout(w, titleBar, filterBar, statusBar, content)
-	}
-
-	if len(notes) == 0 {
-		msg := "No notes found."
-		if a.noteList.filter != "" {
-			msg = fmt.Sprintf("No notes matching %q", a.noteList.filter)
-		}
-		content := emptyColumnStyle.Render(msg)
-		return a.noteListLayout(w, titleBar, filterBar, statusBar, content)
-	}
-
-	// Determine visible range for scrolling
-	visibleStart := 0
-	if a.noteList.cursor >= contentH {
-		visibleStart = a.noteList.cursor - contentH + 1
-	}
-
-	var rows []string
-	for i := visibleStart; i < len(notes) && len(rows) < contentH; i++ {
-		n := notes[i]
-		cursor := "  "
-		style := lipgloss.NewStyle()
-		if i == a.noteList.cursor {
-			cursor = "> "
-			style = style.Bold(true)
-		}
-
-		slug := helpStyle.Render(n.Slug)
-		tags := ""
-		if n.Tags != "" {
-			tags = "  " + labelStyle.Render("["+n.Tags+"]")
-		}
-		updated := helpStyle.Render(relativeTime(n.UpdatedAt))
-
-		title := style.Render(n.Title)
-		line := fmt.Sprintf("%s%s  %s%s  %s", cursor, title, slug, tags, updated)
-
-		line = ansi.Truncate(line, w, "…")
-		rows = append(rows, line)
-	}
-
-	content := strings.Join(rows, "\n")
-	return a.noteListLayout(w, titleBar, filterBar, statusBar, content)
-}
-
-func (a *App) noteListLayout(_ int, titleBar, filterBar, statusBar, content string) string {
-	h := a.height
-	if h == 0 {
-		h = 24
-	}
-	contentH := h - lipgloss.Height(titleBar) - lipgloss.Height(statusBar) - 1
-	if filterBar != "" {
-		contentH -= lipgloss.Height(filterBar)
-	}
-	sized := lipgloss.NewStyle().Height(contentH).Render(content)
-
-	sections := []string{titleBar, sized}
-	if filterBar != "" {
-		sections = []string{titleBar, filterBar, sized}
-	}
-	sections = append(sections, statusBar)
-	return lipgloss.JoinVertical(lipgloss.Left, sections...)
-}
-
-// --- Note View Mode ---
 
 func (a *App) updateNoteView(msg tea.Msg) (tea.Model, tea.Cmd) {
+	v := &a.noteView
 	switch msg := msg.(type) {
-	case noteBacklinksMsg:
-		a.noteView.backlinks = msg.backlinks
-
 	case noteEditedMsg:
-		a.noteView.note = msg.note
-
-	case noteDeletedMsg:
-		if a.wsContent.workspace != nil {
-			return a, a.switchToWSContent(a.wsContent.workspace)
+		if !a.reload() {
+			return a, nil
 		}
-		a.mode = modePicker
-		return a, a.initPicker()
-
-	case errMsg:
-		if a.wsContent.workspace != nil {
-			a.wsContent.err = msg.err
-			return a, a.switchToWSContent(a.wsContent.workspace)
+		if _, err := a.db.GetNote(msg.noteID); errors.Is(err, fstore.ErrNotFound) {
+			a.backToWorkspace()
+			a.feedback = "The note's file is gone"
+			return a, nil
 		}
-		a.mode = modePicker
-		return a, a.initPicker()
+		a.switchToNoteView(msg.noteID)
+		if msg.err != nil {
+			a.err = fmt.Errorf("editor: %w", msg.err)
+		}
 
 	case tea.KeyMsg:
-		if a.noteView.confirming != "" {
-			return a.updateNoteViewConfirming(msg)
+		if v.confirming {
+			v.confirming = false
+			if isYes(msg) {
+				dest, err := a.db.TrashNote(v.note.ID)
+				if a.fail(err) {
+					return a, nil
+				}
+				a.backToWorkspace()
+				a.feedback = "Moved to " + dest
+			}
+			return a, nil
 		}
-
 		switch msg.String() {
 		case "q":
 			return a, tea.Quit
 		case "b", "esc":
-			if a.wsContent.workspace != nil {
-				return a, a.switchToWSContent(a.wsContent.workspace)
-			}
-			a.mode = modePicker
-			return a, a.initPicker()
+			a.backToWorkspace()
 		case "e":
 			return a, a.editNoteExternal()
 		case "d":
-			a.noteView.confirming = "delete"
+			v.confirming = true
 		case "j", "down":
-			a.noteView.scroll++
+			v.scroll++
 		case "k", "up":
-			if a.noteView.scroll > 0 {
-				a.noteView.scroll--
-			}
+			v.scroll = max(0, v.scroll-1)
 		}
 	}
 	return a, nil
 }
-
-func (a *App) updateNoteViewConfirming(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "y", "Y":
-		a.noteView.confirming = ""
-		note := a.noteView.note
-		if note == nil {
-			return a, nil
-		}
-		wsID := ""
-		if a.wsContent.workspace != nil {
-			wsID = a.wsContent.workspace.ID
-		}
-		return a, func() tea.Msg {
-			if err := a.db.DeleteNote(note.ID); err != nil {
-				return errMsg{err}
-			}
-			return noteDeletedMsg{workspaceID: wsID}
-		}
-	default:
-		a.noteView.confirming = ""
-	}
-	return a, nil
-}
-
-// --- Note Edit (external editor) ---
 
 // editorName is looked up once: with no $EDITOR it searches PATH, which is
 // too slow to repeat on every render.
 var editorName = sync.OnceValue(editor.Name)
 
 // editNoteExternal opens the note's own file in the user's editor. The
-// file is the note, so there is no copy to sync back and nothing to
-// overwrite: when the editor exits, kb just reads the vault again.
+// file is the note, so there is nothing to copy back: when the editor
+// exits, kb reads the file again.
 func (a *App) editNoteExternal() tea.Cmd {
 	note := a.noteView.note
-	if note == nil {
+	cmd, err := a.noteEditorCommand(note)
+	if a.fail(err) {
 		return nil
 	}
-	cmd, err := a.noteEditorCommand(note)
-	if err != nil {
-		return func() tea.Msg { return errMsg{err} }
-	}
-	return tea.ExecProcess(cmd, a.afterNoteEdit(note.ID))
+	id := note.ID
+	return tea.ExecProcess(cmd, func(err error) tea.Msg { return noteEditedMsg{noteID: id, err: err} })
 }
 
 func (a *App) noteEditorCommand(note *model.Note) (*exec.Cmd, error) {
@@ -361,100 +119,46 @@ func (a *App) noteEditorCommand(note *model.Note) (*exec.Cmd, error) {
 	return editor.Command(path)
 }
 
-// afterNoteEdit re-indexes the vault once the editor exits and reloads the
-// note, which may have been retitled, retagged or deleted in the editor.
-func (a *App) afterNoteEdit(noteID string) func(error) tea.Msg {
-	db := a.db
-	wsID := ""
-	if a.wsContent.workspace != nil {
-		wsID = a.wsContent.workspace.ID
-	}
-	return func(editErr error) tea.Msg {
-		if _, err := db.Scan(); err != nil {
-			return errMsg{err}
-		}
-		if editErr != nil {
-			return errMsg{fmt.Errorf("editor: %w", editErr)}
-		}
-		note, err := db.GetNote(noteID)
-		if err != nil {
-			return noteDeletedMsg{workspaceID: wsID}
-		}
-		return noteEditedMsg{note: note}
-	}
-}
-
 func (a *App) viewNoteDetail() string {
-	w := a.width
-	if w == 0 {
-		w = 80
-	}
-	h := a.height
-	if h == 0 {
-		h = 24
-	}
-
-	note := a.noteView.note
-	titleBar := titleBarStyle.Width(w).Render(" " + note.Title + " ")
+	v := &a.noteView
+	note := v.note
 	editHint := "e: edit"
 	if name := editorName(); name != "" {
 		editHint = fmt.Sprintf("e: edit (%s)", name)
 	}
-	statusBar := statusBarStyle.Width(w).Render(fmt.Sprintf(" j/k: scroll   %s   d: delete   b: back   q: quit", editHint))
-
-	contentH := h - lipgloss.Height(titleBar) - lipgloss.Height(statusBar) - 1
-	contentW := max(20, w-4)
-
-	if a.noteView.confirming != "" {
-		content := renderCenteredConfirm(w, contentH, fmt.Sprintf("Delete note %q?", note.Title))
-		return lipgloss.JoinVertical(lipgloss.Left, titleBar, content, statusBar)
-	}
-
-	var sections []string
-
-	// Metadata line
-	meta := helpStyle.Render(fmt.Sprintf("[[%s]]   Updated: %s", note.Slug, relativeTime(note.UpdatedAt)))
-	if note.Tags != "" {
-		meta += "   " + labelStyle.Render("["+note.Tags+"]")
-	}
-	sections = append(sections, meta, "")
-
-	// Body
-	if note.Body != "" {
-		body := lipgloss.NewStyle().Width(contentW).Render(note.Body)
-		sections = append(sections, body)
-	} else {
-		sections = append(sections, emptyColumnStyle.Render("(empty note)"))
-	}
-
-	// Backlinks
-	if len(a.noteView.backlinks) > 0 {
-		sections = append(sections, "")
-		blHeader := lipgloss.NewStyle().Bold(true).Underline(true).Render(
-			fmt.Sprintf("Backlinks (%d)", len(a.noteView.backlinks)))
-		sections = append(sections, blHeader)
-
-		for _, bl := range a.noteView.backlinks {
-			ctx := ""
-			if bl.context != "" {
-				ctx = "  " + helpStyle.Render("\""+bl.context+"\"")
-			}
-			sections = append(sections, "  "+bl.label+ctx)
+	hints := fmt.Sprintf(" j/k: scroll   %s   d: delete   b: back   q: quit", editHint)
+	return a.frame(" "+note.Title+" ", hints, nil, func(w, h int) string {
+		if v.confirming {
+			return renderCenteredConfirm(w, h, fmt.Sprintf("Move note %q to the trash?", note.Title))
 		}
-	}
-
-	allContent := strings.Join(sections, "\n")
-	lines := strings.Split(allContent, "\n")
-
-	// Apply scroll
-	if a.noteView.scroll > len(lines)-contentH {
-		a.noteView.scroll = max(0, len(lines)-contentH)
-	}
-	start := a.noteView.scroll
-	end := min(start+contentH, len(lines))
-	visible := lines[start:end]
-
-	inner := "  " + strings.Join(visible, "\n  ")
-	content := lipgloss.NewStyle().Height(contentH).Render(inner)
-	return lipgloss.JoinVertical(lipgloss.Left, titleBar, content, statusBar)
+		contentW := max(20, w-4)
+		meta := helpStyle.Render(fmt.Sprintf("%s   Updated: %s", note.Path, relativeTime(note.UpdatedAt)))
+		if tags := note.TagList(); len(tags) > 0 {
+			meta += "   " + labelStyle.Render("#"+strings.Join(tags, " #"))
+		}
+		sections := []string{ansi.Truncate(meta, contentW, "…"), ""}
+		if note.Body != "" {
+			sections = append(sections, lipgloss.NewStyle().Width(contentW).Render(note.Body))
+		} else {
+			sections = append(sections, emptyColumnStyle.Render("(empty note)"))
+		}
+		if len(v.backlinks) > 0 {
+			sections = append(sections, "", lipgloss.NewStyle().Bold(true).Underline(true).Render(fmt.Sprintf("Backlinks (%d)", len(v.backlinks))))
+			for _, bl := range v.backlinks {
+				label := "[[" + bl.Title + "]]"
+				if bl.SourceType == "card" {
+					label = fmt.Sprintf("card %q on %s", bl.Title, bl.Board)
+				}
+				line := "  " + label
+				if ctx := strings.TrimSpace(bl.Context); ctx != "" {
+					line += "  " + helpStyle.Render("\""+ctx+"\"")
+				}
+				sections = append(sections, ansi.Truncate(line, contentW, "…"))
+			}
+		}
+		lines := strings.Split(strings.Join(sections, "\n"), "\n")
+		v.scroll = max(0, min(v.scroll, len(lines)-h))
+		visible := lines[v.scroll:min(v.scroll+h, len(lines))]
+		return "  " + strings.Join(visible, "\n  ")
+	})
 }
