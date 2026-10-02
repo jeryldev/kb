@@ -2,21 +2,15 @@ package tui
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/jeryldev/kb/internal/editor"
 	"github.com/jeryldev/kb/internal/model"
 
 	tea "github.com/charmbracelet/bubbletea"
-)
-
-var (
-	cachedEditor     string
-	cachedEditorOnce sync.Once
 )
 
 type noteListModel struct {
@@ -341,80 +335,54 @@ func (a *App) updateNoteViewConfirming(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // --- Note Edit (external editor) ---
 
-func resolveEditor() string {
-	cachedEditorOnce.Do(func() {
-		if ed := os.Getenv("EDITOR"); ed != "" {
-			cachedEditor = ed
-			return
-		}
-		for _, name := range []string{"nvim", "vim", "vi", "nano"} {
-			if p, err := exec.LookPath(name); err == nil {
-				cachedEditor = p
-				return
-			}
-		}
-	})
-	return cachedEditor
-}
+// editorName is looked up once: with no $EDITOR it searches PATH, which is
+// too slow to repeat on every render.
+var editorName = sync.OnceValue(editor.Name)
 
-func editorDisplayName(editor string) string {
-	return filepath.Base(editor)
-}
-
+// editNoteExternal opens the note's own file in the user's editor. The
+// file is the note, so there is no copy to sync back and nothing to
+// overwrite: when the editor exits, kb just reads the vault again.
 func (a *App) editNoteExternal() tea.Cmd {
 	note := a.noteView.note
 	if note == nil {
 		return nil
 	}
-
-	editor := resolveEditor()
-	if editor == "" {
-		return nil
-	}
-
-	tmpFile, err := os.CreateTemp("", fmt.Sprintf("kb-note-%s-*.md", note.Slug))
+	cmd, err := a.noteEditorCommand(note)
 	if err != nil {
 		return func() tea.Msg { return errMsg{err} }
 	}
-	tmpPath := tmpFile.Name()
+	return tea.ExecProcess(cmd, a.afterNoteEdit(note.ID))
+}
 
-	if _, err := tmpFile.WriteString(note.Body); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpPath)
-		return func() tea.Msg { return errMsg{err} }
+func (a *App) noteEditorCommand(note *model.Note) (*exec.Cmd, error) {
+	path, err := a.db.Vault().Abs(note.Path)
+	if err != nil {
+		return nil, err
 	}
-	tmpFile.Close()
+	return editor.Command(path)
+}
 
-	c := exec.Command(editor, tmpPath)
-	c.Stdin = os.Stdin
-	c.Stdout = os.Stdout
-	c.Stderr = os.Stderr
-
-	noteID := note.ID
+// afterNoteEdit re-indexes the vault once the editor exits and reloads the
+// note, which may have been retitled, retagged or deleted in the editor.
+func (a *App) afterNoteEdit(noteID string) func(error) tea.Msg {
 	db := a.db
-
-	return tea.ExecProcess(c, func(err error) tea.Msg {
-		defer os.Remove(tmpPath)
+	wsID := ""
+	if a.wsContent.workspace != nil {
+		wsID = a.wsContent.workspace.ID
+	}
+	return func(editErr error) tea.Msg {
+		if _, err := db.Scan(); err != nil {
+			return errMsg{err}
+		}
+		if editErr != nil {
+			return errMsg{fmt.Errorf("editor: %w", editErr)}
+		}
+		note, err := db.GetNote(noteID)
 		if err != nil {
-			return errMsg{err}
+			return noteDeletedMsg{workspaceID: wsID}
 		}
-		data, err := os.ReadFile(tmpPath)
-		if err != nil {
-			return errMsg{err}
-		}
-		current, err := db.GetNote(noteID)
-		if err != nil {
-			return errMsg{err}
-		}
-		current.Body = string(data)
-		if err := db.UpdateNote(current); err != nil {
-			return errMsg{err}
-		}
-		if err := db.SyncNoteLinks(current); err != nil {
-			return errMsg{fmt.Errorf("syncing note links: %w", err)}
-		}
-		return noteEditedMsg{note: current}
-	})
+		return noteEditedMsg{note: note}
+	}
 }
 
 func (a *App) viewNoteDetail() string {
@@ -430,8 +398,8 @@ func (a *App) viewNoteDetail() string {
 	note := a.noteView.note
 	titleBar := titleBarStyle.Width(w).Render(" " + note.Title + " ")
 	editHint := "e: edit"
-	if editor := resolveEditor(); editor != "" {
-		editHint = fmt.Sprintf("e: edit (%s)", editorDisplayName(editor))
+	if name := editorName(); name != "" {
+		editHint = fmt.Sprintf("e: edit (%s)", name)
 	}
 	statusBar := statusBarStyle.Width(w).Render(fmt.Sprintf(" j/k: scroll   %s   d: delete   b: back   q: quit", editHint))
 
