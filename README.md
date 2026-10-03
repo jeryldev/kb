@@ -39,6 +39,20 @@ kb                                     # the TUI
 
 Card and column commands work on one board: `--board`/`-B`, or `$KB_BOARD`, or else the board named after the folder you are in, or after its git repository (also from a worktree). So inside `~/code/sprint-1` plain `kb cards` is enough.
 
+## Built-in help
+
+`kb help start` walks you through your first notes, a link between them and a board. Other guides:
+
+| Command | Covers |
+|---|---|
+| `kb help links` | connecting notes with `[[wikilinks]]`: headings, aliases, display text, links from cards, backlinks, the graph |
+| `kb help kanban` | boards, columns and cards, and how they are stored |
+| `kb help tui` | the keys of the full-screen view |
+| `kb help files` | where kb keeps things, the frontmatter it reads, its settings |
+| `kb help scripting` | JSON output, confirmations and exit codes |
+
+Every command has examples: `kb <command> --help`, for example `kb card add --help`.
+
 ## Notes and wikilinks
 
 Each note is a Markdown file in the vault (`$KB_VAULT`, default `~/notes`), named by its title, like `Meeting notes.md`. A file with no frontmatter is a note too, so an existing Obsidian vault works as is, and kb never rewrites a file just by reading it.

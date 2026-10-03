@@ -33,8 +33,10 @@ var rootCmd = &cobra.Command{
 
 Everything is a file in your vault folder ($KB_VAULT, default ~/notes):
 notes are Markdown, boards are Markdown in the Obsidian Kanban plugin's
-format, and workspaces are listed in .kb/workspaces.yml. Run kb alone for
-the TUI.
+format, and workspaces are listed in .kb/workspaces.yml. Run kb alone in
+a terminal window for the full-screen view.
+
+New to kb? Start with: kb help start
 
 Card and column commands work on the current board: --board, else
 $KB_BOARD, else the board named after the folder you are in or after its
