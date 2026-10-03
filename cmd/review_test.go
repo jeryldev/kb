@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 // Tests for the findings of the 0.3 CLI review, by finding.
@@ -506,4 +508,46 @@ func missing(t *testing.T, what string) {
 		t.Fatalf("%s, and KB_CI is set", what)
 	}
 	t.Skip(what)
+}
+
+func TestTheGuidesOpenWithKbHelp(t *testing.T) {
+	for topic, want := range map[string]string{
+		"start":     "Connect two notes with a link",
+		"links":     "[[Cash and Cash Equivalents|cash]]",
+		"kanban":    "kb card move <id> Done -B study",
+		"tui":       "1 2 3 4",
+		"files":     "aliases: [PCF]",
+		"scripting": "kb cards -B study --json",
+	} {
+		out := executeCmd(t, "help", topic)
+		if !strings.Contains(out, want) {
+			t.Errorf("kb help %s lacks %q", topic, want)
+		}
+	}
+	if out := executeCmd(t, "--help"); !strings.Contains(out, "kb help start") || !strings.Contains(out, "Additional help topics") {
+		t.Errorf("kb --help should point to the guides:\n%s", out)
+	}
+}
+
+// Every command that does something shows how to use it.
+func TestEveryCommandHasExamples(t *testing.T) {
+	var walk func(c *cobra.Command)
+	walk = func(c *cobra.Command) {
+		for _, sub := range c.Commands() {
+			if sub.Runnable() && sub.Example == "" && sub.Name() != "help" && sub.Parent().Name() != "completion" && sub.Name() != "completion" {
+				t.Errorf("%s has no examples", sub.CommandPath())
+			}
+			walk(sub)
+		}
+	}
+	walk(rootCmd)
+}
+
+func TestTheFullScreenViewExplainsAMissingTerminal(t *testing.T) {
+	setupTestDB(t)
+	// Tests run with no terminal, as an AI assistant's shell does.
+	_, err := executeCmdErr(t)
+	if !errors.Is(err, errNoTerminal) || !strings.Contains(err.Error(), "kb notes") {
+		t.Errorf("err = %v", err)
+	}
 }

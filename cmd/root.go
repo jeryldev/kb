@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -33,8 +34,10 @@ var rootCmd = &cobra.Command{
 
 Everything is a file in your vault folder ($KB_VAULT, default ~/notes):
 notes are Markdown, boards are Markdown in the Obsidian Kanban plugin's
-format, and workspaces are listed in .kb/workspaces.yml. Run kb alone for
-the TUI.
+format, and workspaces are listed in .kb/workspaces.yml. Run kb alone in
+a terminal window for the full-screen view.
+
+New to kb? Start with: kb help start
 
 Card and column commands work on the current board: --board, else
 $KB_BOARD, else the board named after the folder you are in or after its
@@ -65,6 +68,11 @@ Upgrading from kb 0.3? Run kb import once.`,
 		return nil
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// The full-screen view draws on a terminal; run where there is none
+		// (an editor's task runner, an AI assistant's shell), say so plainly.
+		if !isTerminal(os.Stdin) || !isTerminal(os.Stdout) {
+			return errNoTerminal
+		}
 		app := tui.NewApp(db, detectBoard())
 		_, err := tea.NewProgram(app, tea.WithAltScreen()).Run()
 		return err
@@ -96,6 +104,10 @@ func Execute() error {
 
 // holdOnError says whether to wait before exiting on an error: when the
 // TUI could not start in a terminal inside tmux, such as a popup.
+var errNoTerminal = errors.New(`kb's full-screen view needs a terminal window, and this one has none.
+Open kb in a terminal (Terminal, iTerm, a tmux pane), or use the commands
+here: kb notes, kb boards, kb cards -B <board>. See: kb help`)
+
 func holdOnError(c *cobra.Command, terminal, inTmux bool) bool {
 	return c == rootCmd && terminal && inTmux
 }

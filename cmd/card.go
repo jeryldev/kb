@@ -339,7 +339,7 @@ func init() {
 	cardEditCmd.Flags().StringP("priority", "p", "", "New priority (low, medium, high, urgent)")
 	cardEditCmd.Flags().StringP("external-id", "e", "", "New external ID")
 
-	cardMoveCmd.Flags().String("before", "", "Put the card above this card")
+	cardMoveCmd.Flags().String("before", "", "Put the card above this card (one in the target column)")
 	cardMoveCmd.Flags().BoolP("force", "f", false, "Move even if the column is at its WIP limit")
 
 	cardDeleteCmd.Flags().BoolP("force", "f", false, "Skip confirmation")
