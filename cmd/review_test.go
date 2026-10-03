@@ -542,3 +542,12 @@ func TestEveryCommandHasExamples(t *testing.T) {
 	}
 	walk(rootCmd)
 }
+
+func TestTheFullScreenViewExplainsAMissingTerminal(t *testing.T) {
+	setupTestDB(t)
+	// Tests run with no terminal, as an AI assistant's shell does.
+	_, err := executeCmdErr(t)
+	if !errors.Is(err, errNoTerminal) || !strings.Contains(err.Error(), "kb notes") {
+		t.Errorf("err = %v", err)
+	}
+}
