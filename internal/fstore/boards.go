@@ -67,10 +67,7 @@ func (s *Store) updateBoardFile(rel string, fn func(*boardDoc) error) error {
 		_, err = s.vault.Write(rel, &vault.Doc{Body: string(b.Render())})
 		return err
 	})
-	if reloadErr := s.Reload(); reloadErr != nil && err == nil {
-		err = reloadErr
-	}
-	return err
+	return s.reloadAfter(err)
 }
 
 // rewriteBoardLinks rewrites links in the cards of one board, for a note
@@ -315,7 +312,7 @@ func (s *Store) SetWIPLimit(boardID, lane string, limit int) error {
 	return s.withBoard(boardID, func(b *boardDoc) error {
 		l := b.Lane(lane)
 		if l == nil {
-			return fmt.Errorf("no lane %q", lane)
+			return fmt.Errorf("no column %q", lane)
 		}
 		l.MaxItems = limit
 		return nil
@@ -328,11 +325,11 @@ func (s *Store) DeleteLane(boardID, lane string, force bool) error {
 	return s.withBoard(boardID, func(b *boardDoc) error {
 		l := b.Lane(lane)
 		if l == nil {
-			return fmt.Errorf("no lane %q", lane)
+			return fmt.Errorf("no column %q", lane)
 		}
 		if items := l.Items(); len(items) > 0 {
 			if !force {
-				return fmt.Errorf("lane %q has %d cards; use --force to archive them and delete the lane", l.Title, len(items))
+				return fmt.Errorf("column %q has %d cards; use --force to archive them and delete the column", l.Title, len(items))
 			}
 			for _, it := range items {
 				if err := b.ArchiveItem(it.ID); err != nil {
@@ -351,7 +348,11 @@ type WIPLimitError struct {
 }
 
 func (e *WIPLimitError) Error() string {
-	return fmt.Sprintf("lane %q is at its limit of %d cards (use --force to go over it)", e.Lane, e.Limit)
+	cards := "cards"
+	if e.Limit == 1 {
+		cards = "card"
+	}
+	return fmt.Sprintf("column %q is at its limit of %d %s", e.Lane, e.Limit, cards)
 }
 
 func checkWIP(l *board.Lane, force bool) error {
@@ -398,7 +399,7 @@ func (s *Store) Cards(boardID, lane string) ([]*model.Card, error) {
 	}
 	l := bf.b.Lane(lane)
 	if l == nil {
-		return nil, fmt.Errorf("no lane %q on board %q", lane, bf.name())
+		return nil, fmt.Errorf("no column %q on board %q", lane, bf.name())
 	}
 	var out []*model.Card
 	for i, it := range l.Items() {
@@ -447,7 +448,7 @@ func (s *Store) AddCard(boardID, lane, title string, f CardFields, force bool) (
 	err := s.withBoard(boardID, func(b *boardDoc) error {
 		l := b.Lane(lane)
 		if l == nil {
-			return fmt.Errorf("no lane %q", lane)
+			return fmt.Errorf("no column %q", lane)
 		}
 		if err := checkWIP(l, force); err != nil {
 			return err
@@ -478,9 +479,6 @@ func (s *Store) AddCard(boardID, lane, title string, f CardFields, force bool) (
 // external id. If the card's text changed since it was read (its Rev), the
 // edit is refused with ErrConflict rather than overwrite that change.
 func (s *Store) UpdateCard(c *model.Card) error {
-	if err := board.ValidateCardTitle(c.Title); err != nil {
-		return err
-	}
 	err := s.withBoard(c.BoardID, func(b *boardDoc) error {
 		it, _ := b.Find(c.ID)
 		if it == nil {
@@ -489,7 +487,12 @@ func (s *Store) UpdateCard(c *model.Card) error {
 		if c.Rev != "" && cardRev(it) != c.Rev {
 			return ErrConflict
 		}
+		// Only a new title is checked: a card that has no words of its own
+		// (only a tag) keeps its empty one.
 		if it.Title != c.Title {
+			if err := board.ValidateCardTitle(c.Title); err != nil {
+				return err
+			}
 			it.SetTitle(c.Title)
 		}
 		if it.Description != c.Description {
@@ -539,7 +542,7 @@ func (s *Store) MoveCard(boardID, cardID, lane, beforeID string, force bool) err
 		}
 		to := b.Lane(lane)
 		if to == nil {
-			return fmt.Errorf("no lane %q", lane)
+			return fmt.Errorf("no column %q", lane)
 		}
 		if to != from {
 			if err := checkWIP(to, force); err != nil {
@@ -598,6 +601,9 @@ func (s *Store) FindCard(boardID, ref string) (*model.Card, error) {
 	}
 	switch len(matches) {
 	case 0:
+		if len(ref) < 4 {
+			return nil, fmt.Errorf("card %q: %w; give the whole id or at least 4 characters of it", ref, ErrNotFound)
+		}
 		return nil, fmt.Errorf("card %q: %w", ref, ErrNotFound)
 	case 1:
 		return matches[0], nil

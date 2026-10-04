@@ -382,3 +382,34 @@ func TestANoteInICloudIsNeverOverwrittenWithItsPlaceholder(t *testing.T) {
 		t.Errorf("file = %q", got)
 	}
 }
+
+// A note created with tags is written once, tags and all: no window in
+// which it exists without them.
+func TestANoteIsCreatedWithItsTagsInOneWrite(t *testing.T) {
+	s := testStore(t)
+	before := s.reloads
+	n, err := s.CreateNote("Tagged", "", "body", "", "go", "notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.Tags != "go,notes" {
+		t.Errorf("tags = %q", n.Tags)
+	}
+	if got := s.reloads - before; got != 1 {
+		t.Errorf("the vault was read %d times, want once", got)
+	}
+}
+
+// CJK text has no spaces between words, so a word inside a sentence is
+// still found.
+func TestSearchFindsAWordInsideCJKText(t *testing.T) {
+	s := testStore(t)
+	put(t, s, "trip.md", "明日は東京タワーに行く\n")
+	put(t, s, "other.md", "something else\n")
+	reload(t, s)
+	for _, q := range []string{"東京", "タワー", "東京タワー"} {
+		if got := strings.Join(slugs(s.SearchNotes(q)), ","); got != "trip" {
+			t.Errorf("SearchNotes(%q) = %q, want trip", q, got)
+		}
+	}
+}

@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/jeryldev/kb/internal/model"
+	"github.com/jeryldev/kb/internal/publish"
 	"github.com/jeryldev/kb/internal/vault"
-	"gopkg.in/yaml.v3"
 )
 
 // Publish targets hold paths on this machine (the site's folder), so they
@@ -26,20 +26,22 @@ type targetYAML struct {
 
 func (s *Store) publishFile() string { return filepath.Join(s.opts.ConfigDir, "publish.yml") }
 
-func (s *Store) readTargets() []targetYAML {
-	var file struct {
-		Targets []targetYAML `yaml:"targets"`
-	}
-	if data, err := os.ReadFile(s.publishFile()); err == nil {
-		yaml.Unmarshal(data, &file)
-	}
-	return file.Targets
+type targetsYAML struct {
+	Targets []targetYAML `yaml:"targets"`
 }
 
-// ListPublishTargets lists this machine's publish targets.
+func (s *Store) readTargets() ([]targetYAML, error) {
+	var file targetsYAML
+	err := readConfigFile(s.publishFile(), &file)
+	return file.Targets, err
+}
+
+// ListPublishTargets lists this machine's publish targets. A publish.yml
+// kb cannot read lists none, and is among the store's Problems.
 func (s *Store) ListPublishTargets() []*model.PublishTarget {
 	var out []*model.PublishTarget
-	for _, t := range s.readTargets() {
+	targets, _ := s.readTargets()
+	for _, t := range targets {
 		pt := &model.PublishTarget{ID: t.Name, Name: t.Name, Engine: model.Engine(t.Engine), BasePath: t.Path, PostsDir: t.PostsDir, Permalink: t.Permalink}
 		if t.Workspace != "" {
 			id := s.workspaceIDForName(t.Workspace)
@@ -50,23 +52,24 @@ func (s *Store) ListPublishTargets() []*model.PublishTarget {
 	return out
 }
 
-func (s *Store) writeTargets(list []targetYAML) error {
-	var file struct {
-		Targets []targetYAML `yaml:"targets"`
+// editTargets changes publish.yml from the list in it now, under its lock.
+func (s *Store) editTargets(fn func([]targetYAML) ([]targetYAML, error)) error {
+	var fnErr error
+	err := s.editConfigFile(s.publishFile(), func() (any, bool, error) {
+		list, err := s.readTargets()
+		if err != nil {
+			return nil, false, err
+		}
+		list, fnErr = fn(list)
+		if fnErr != nil {
+			return nil, false, nil
+		}
+		return targetsYAML{Targets: list}, true, nil
+	})
+	if fnErr != nil {
+		return fnErr
 	}
-	file.Targets = list
-	data, err := yaml.Marshal(file)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(s.opts.ConfigDir, 0o755); err != nil {
-		return err
-	}
-	tmp := s.publishFile() + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.publishFile())
+	return err
 }
 
 // CreatePublishTarget adds a site to publish to. Its path must be absolute
@@ -77,6 +80,9 @@ func (s *Store) CreatePublishTarget(name string, engine model.Engine, sitePath, 
 		return nil, fmt.Errorf("a publish target needs a name")
 	}
 	if _, err := model.ParseEngine(string(engine)); err != nil {
+		return nil, err
+	}
+	if err := publish.ValidatePermalink(permalink); err != nil {
 		return nil, err
 	}
 	if rest, ok := strings.CutPrefix(sitePath, "~/"); ok {
@@ -92,14 +98,15 @@ func (s *Store) CreatePublishTarget(name string, engine model.Engine, sitePath, 
 	if postsDir == "" {
 		postsDir = "_posts"
 	}
-	list := s.readTargets()
-	for _, t := range list {
-		if strings.EqualFold(t.Name, name) {
-			return nil, fmt.Errorf("publish target %q already exists", name)
+	err := s.editTargets(func(list []targetYAML) ([]targetYAML, error) {
+		for _, t := range list {
+			if strings.EqualFold(t.Name, name) {
+				return nil, fmt.Errorf("publish target %q already exists", name)
+			}
 		}
-	}
-	list = append(list, targetYAML{Name: name, Engine: string(engine), Path: filepath.Clean(sitePath), PostsDir: postsDir, Permalink: permalink, Workspace: s.workspaceNameForFile(workspaceID)})
-	if err := s.writeTargets(list); err != nil {
+		return append(list, targetYAML{Name: name, Engine: string(engine), Path: filepath.Clean(sitePath), PostsDir: postsDir, Permalink: permalink, Workspace: s.workspaceNameForFile(workspaceID)}), nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	return s.GetPublishTarget(name)
@@ -117,17 +124,18 @@ func (s *Store) GetPublishTarget(name string) (*model.PublishTarget, error) {
 // DeletePublishTarget forgets a site. The posts already written there and
 // the history in notes are left alone.
 func (s *Store) DeletePublishTarget(name string) error {
-	list := s.readTargets()
-	var kept []targetYAML
-	for _, t := range list {
-		if !strings.EqualFold(t.Name, name) {
-			kept = append(kept, t)
+	return s.editTargets(func(list []targetYAML) ([]targetYAML, error) {
+		var kept []targetYAML
+		for _, t := range list {
+			if !strings.EqualFold(t.Name, name) {
+				kept = append(kept, t)
+			}
 		}
-	}
-	if len(kept) == len(list) {
-		return fmt.Errorf("publish target %q: %w", name, ErrNotFound)
-	}
-	return s.writeTargets(kept)
+		if len(kept) == len(list) {
+			return nil, fmt.Errorf("publish target %q: %w", name, ErrNotFound)
+		}
+		return kept, nil
+	})
 }
 
 // Post is where a note was published on a target.
