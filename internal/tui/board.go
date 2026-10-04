@@ -1,11 +1,16 @@
 package tui
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/jeryldev/kb/internal/fstore"
 	"github.com/jeryldev/kb/internal/model"
 )
@@ -32,10 +37,24 @@ type boardModel struct {
 	moveOrigCard int
 	moveCard     *model.Card
 	showHelp     bool
+
+	// diskRev is the board file's content when it was last read; a key
+	// press that finds the file changed reads the board again.
+	diskRev string
+	// forceMove makes the next confirmed move go over the column's limit.
+	forceMove bool
 }
 
-// loadBoard reads the board as it is on disk now.
+// loadBoard reads the board as it is on disk now, keeping the selected
+// card selected when it is still in the focused column.
 func (a *App) loadBoard() {
+	selected := ""
+	if c := a.selectedCard(); c != nil {
+		selected = c.ID
+	}
+	// The hash is taken before the read, so a write landing between them
+	// shows on the next key instead of never.
+	rev := a.boardFileRev()
 	if !a.reload() {
 		return
 	}
@@ -56,9 +75,61 @@ func (a *App) loadBoard() {
 		cards[l.Name] = list
 	}
 	a.board.board, a.board.lanes, a.board.cards = board, lanes, cards
+	a.board.diskRev = rev
 	a.board.focusCol = max(0, min(a.board.focusCol, len(lanes)-1))
+	for i, c := range a.focusedCards() {
+		if c.ID == selected {
+			a.board.focusCard = i
+		}
+	}
 	a.clampCardSelection()
 	a.adjustScroll()
+}
+
+// boardFileRev is a hash of the board file as it is now, or "" when it
+// cannot be read without waiting (a file still in iCloud).
+func (a *App) boardFileRev() string {
+	if a.db == nil || a.board.board == nil {
+		return ""
+	}
+	v := a.db.Vault()
+	e, err := v.Stat(a.board.board.ID)
+	if err != nil || e.Dataless {
+		return ""
+	}
+	abs, err := v.Abs(a.board.board.ID)
+	if err != nil {
+		return ""
+	}
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:8])
+}
+
+// followDisk reads the board again when its file changed since kb last
+// read it (an editor, the Kanban plugin or another kb wrote it), so what
+// is on screen, and what an edit starts from, is the file as it is.
+func (a *App) followDisk() {
+	if a.board.board == nil || a.db == nil {
+		return
+	}
+	if _, err := a.db.Vault().Stat(a.board.board.ID); err != nil {
+		a.boardGone()
+		return
+	}
+	if rev := a.boardFileRev(); rev != "" && rev != a.board.diskRev {
+		a.loadBoard()
+	}
+}
+
+// boardGone leaves a board whose file was removed or renamed elsewhere.
+func (a *App) boardGone() {
+	a.err = fmt.Errorf("board %q is gone: its file was moved, renamed or deleted", a.board.board.Name)
+	a.board = boardModel{}
+	a.backToWorkspace()
 }
 
 func (a *App) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -67,6 +138,9 @@ func (a *App) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 	b := &a.board
+	if !b.filtering && b.confirming == "" && !b.moving {
+		a.followDisk()
+	}
 	switch {
 	case b.filtering:
 		return a.updateBoardFiltering(key)
@@ -129,6 +203,11 @@ func (a *App) updateBoard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.togglePriorityFilter(model.PriorityLow)
 	case "b":
 		a.backToWorkspace()
+	case "r":
+		a.loadBoard()
+		if a.err == nil {
+			a.feedback = "Read the board again"
+		}
 	case "?":
 		b.showHelp = true
 	case "q":
@@ -440,7 +519,17 @@ func (a *App) commitCardMove() {
 	}
 	lane := b.lanes[b.focusCol].Name
 	before := a.moveTarget()
-	err := a.db.MoveCard(b.board.ID, card.ID, lane, before, false)
+	force := b.forceMove
+	b.forceMove = false
+	err := a.db.MoveCard(b.board.ID, card.ID, lane, before, force)
+	var wip *fstore.WIPLimitError
+	if errors.As(err, &wip) {
+		// Ask, with the move still on screen; y moves it anyway.
+		b.forceMove = true
+		b.confirming = "move"
+		a.err = fmt.Errorf("%w; move it anyway?", err)
+		return
+	}
 	if err != nil {
 		a.cancelMoving()
 		a.err = err
@@ -491,7 +580,13 @@ func (a *App) editSelectedCard(returnTo mode) tea.Cmd {
 }
 
 func (a *App) cardFormWidth() int {
-	return max(50, min(a.width*80/100, 100))
+	return formWidth(a.width)
+}
+
+// formWidth is the width of the card dialogs on a terminal termW wide;
+// they are drawn narrower when the terminal is.
+func formWidth(termW int) int {
+	return max(50, min(termW*80/100, 100))
 }
 
 func (a *App) togglePriorityFilter(p model.Priority) {
@@ -550,7 +645,12 @@ func (a *App) viewBoard() string {
 		extra = append(extra, bar)
 	}
 	if b.filtering {
-		extra = append(extra, filterBarStyle.Render(" / "+b.filterInput)+"█")
+		// A filter longer than the bar shows its end, where the cursor is.
+		input := " / " + b.filterInput
+		if room := w - 1; ansi.StringWidth(input) > room {
+			input = ansi.TruncateLeft(input, ansi.StringWidth(input)-room+1, "…")
+		}
+		extra = append(extra, filterBarStyle.Render(input)+"█")
 	} else if a.filtering() {
 		var parts []string
 		if b.filter != "" {
@@ -596,7 +696,9 @@ func (a *App) renderConfirmDialog(w, h int) string {
 	switch b.confirming {
 	case "move":
 		from, to := b.lanes[b.moveOrigCol].Name, b.lanes[b.focusCol].Name
-		if from == to {
+		if b.forceMove {
+			prompt = fmt.Sprintf("%s is full. Move %q there anyway?", to, truncate(card.Title, 20))
+		} else if from == to {
 			prompt = fmt.Sprintf("Reorder %q in %s?", truncate(card.Title, 25), to)
 		} else {
 			prompt = fmt.Sprintf("Move %q from %s to %s?", truncate(card.Title, 20), from, to)
@@ -730,6 +832,7 @@ func (a *App) viewBoardHelp() string {
 		{"/", "Filter by text or label"},
 		{"1-4", "Show only urgent/high/medium/low"},
 		{"Esc", "Clear the filters"},
+		{"r", "Read the board again from its file"},
 		{"b", "Back to the workspace"},
 		{"?", "This help"},
 		{"q", "Quit"},
@@ -739,7 +842,13 @@ func (a *App) viewBoardHelp() string {
 		lines = append(lines, fmt.Sprintf("  %s  %s", formLabelActiveStyle.Width(12).Render(e.key), e.desc))
 	}
 	return a.frame(a.boardTitle(), " Press any key to close help", nil, func(w, h int) string {
-		return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, dialogBoxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, lines...)))
+		help := lipgloss.JoinVertical(lipgloss.Left, lines...)
+		boxed := dialogBoxStyle.Render(help)
+		// Too small for the box: the lines alone, from the top.
+		if lipgloss.Width(boxed) > w || lipgloss.Height(boxed) > h {
+			return help
+		}
+		return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, boxed)
 	})
 }
 
@@ -751,16 +860,11 @@ func progressBar(done, total, width int) string {
 	return strings.Repeat("━", filled) + strings.Repeat("░", width-filled)
 }
 
-func truncate(s string, maxLen int) string {
-	if maxLen <= 0 {
-		return ""
+// truncate cuts s to at most width terminal cells, ending in "…" when it
+// cuts. Cells, not runes: a CJK character or an emoji takes two.
+func truncate(s string, width int) string {
+	if width <= 1 {
+		return ansi.Truncate(s, max(0, width), "")
 	}
-	runes := []rune(s)
-	if len(runes) <= maxLen {
-		return s
-	}
-	if maxLen <= 1 {
-		return string(runes[:maxLen])
-	}
-	return string(runes[:maxLen-1]) + "…"
+	return ansi.Truncate(s, width, "…")
 }

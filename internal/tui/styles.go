@@ -77,12 +77,22 @@ func priorityStyle(priority string) lipgloss.Style {
 	return lipgloss.NewStyle()
 }
 
+// renderCenteredConfirm asks a yes/no question in a box, the prompt
+// wrapped to fit; a terminal too small for the box gets the lines alone.
 func renderCenteredConfirm(width, height int, prompt string) string {
-	dialogContent := lipgloss.JoinVertical(lipgloss.Center,
-		errorStyle.Render(prompt),
+	const hint = "y: confirm   n: cancel"
+	// The border and padding take 6 cells across and 4 lines down.
+	inner := min(max(lipgloss.Width(prompt), len(hint)), width-6)
+	content := lipgloss.JoinVertical(lipgloss.Center,
+		errorStyle.Width(max(1, inner)).Align(lipgloss.Center).Render(prompt),
 		"",
-		helpStyle.Render("y: confirm   n: cancel"),
+		helpStyle.Render(hint),
 	)
-	dialog := dialogBoxStyle.Render(dialogContent)
+	dialog := dialogBoxStyle.Render(content)
+	if lipgloss.Width(dialog) > width || lipgloss.Height(dialog) > height {
+		content = lipgloss.JoinVertical(lipgloss.Left,
+			errorStyle.Width(max(1, width)).Render(prompt), helpStyle.Render(hint))
+		return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Center, content)
+	}
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, dialog)
 }

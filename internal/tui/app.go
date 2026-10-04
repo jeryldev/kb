@@ -21,8 +21,9 @@ const (
 )
 
 // App is the TUI. Every store call happens in Update, never in a tea.Cmd:
-// the store is not safe for use from several goroutines, and its calls
-// take a millisecond or so, which is fine to wait for.
+// the store is not safe for use from several goroutines. A call that
+// writes reads the vault again, parsing only files that changed, which
+// is quick enough to wait for.
 type App struct {
 	db        *fstore.Store
 	boardName string
@@ -44,9 +45,6 @@ type App struct {
 	height int
 }
 
-// errMsg reports an error from a command, such as the editor failing.
-type errMsg struct{ err error }
-
 func NewApp(db *fstore.Store, boardName string) *App {
 	return &App{db: db, boardName: boardName, mode: modePicker}
 }
@@ -61,14 +59,24 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.width = msg.Width
 		a.height = msg.Height
+		if a.board.board != nil {
+			a.adjustScroll()
+		}
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			return a, tea.Quit
 		}
+		// Keys typed faster than kb reads them arrive as one event ("jj");
+		// outside a text field each is a key of its own.
+		if msg.Type == tea.KeyRunes && len(msg.Runes) > 1 && !msg.Paste && !a.typing() {
+			var cmds []tea.Cmd
+			for _, r := range msg.Runes {
+				_, cmd := a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}, Alt: msg.Alt})
+				cmds = append(cmds, cmd)
+			}
+			return a, tea.Batch(cmds...)
+		}
 		a.err, a.feedback = nil, ""
-	case errMsg:
-		a.err = msg.err
-		return a, nil
 	}
 
 	switch a.mode {
@@ -86,6 +94,20 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.updateNoteView(msg)
 	}
 	return a, nil
+}
+
+// typing reports whether a text field has the keys, which take a burst of
+// characters as text.
+func (a *App) typing() bool {
+	switch {
+	case a.mode == modeCardEdit && !a.card.confirmDiscard:
+		return true
+	case a.mode == modeBoard && a.board.filtering:
+		return true
+	case a.mode == modeWSContent && a.wsContent.creating != "":
+		return true
+	}
+	return false
 }
 
 func (a *App) View() string {
@@ -150,17 +172,21 @@ func (a *App) frame(title, hints string, extra []string, content func(w, h int) 
 	w, h := a.size()
 	titleBar := titleBarStyle.Width(w).Render(truncate(title, max(1, w-2)))
 	statusBar := statusBarStyle.Width(w).Render(truncate(hints, max(1, w-2)))
+	// Each bar below the content is one line, cut to the width, so the
+	// title bar is never pushed off the top.
+	oneLine := lipgloss.NewStyle().MaxWidth(w).MaxHeight(1)
 	var below []string
 	for _, e := range extra {
 		if e != "" {
-			below = append(below, e)
+			below = append(below, oneLine.Render(e))
 		}
 	}
 	if m := a.messageBar(w); m != "" {
-		below = append(below, m)
+		below = append(below, oneLine.Render(m))
 	}
 	contentH := h - lipgloss.Height(titleBar) - lipgloss.Height(statusBar) - len(below)
-	body := lipgloss.NewStyle().Height(max(1, contentH)).MaxHeight(max(1, contentH)).Render(content(w, max(1, contentH)))
+	ch := max(1, contentH)
+	body := lipgloss.NewStyle().Height(ch).MaxHeight(ch).MaxWidth(w).Render(content(w, ch))
 	sections := append([]string{titleBar, body}, below...)
 	sections = append(sections, statusBar)
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)

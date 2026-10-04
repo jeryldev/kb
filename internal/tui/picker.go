@@ -34,7 +34,9 @@ func (a *App) initPicker() {
 		a.boardName = ""
 		board, err := a.db.GetBoard(name)
 		if err != nil {
-			if !errors.Is(err, fstore.ErrNotFound) {
+			if errors.Is(err, fstore.ErrNotFound) {
+				a.feedback = fmt.Sprintf("No board named %q; pick a workspace", name)
+			} else {
 				a.err = err
 			}
 			return
@@ -83,12 +85,13 @@ func (a *App) viewPicker() string {
 			if ws.Description != "" {
 				line += helpStyle.Render("  " + truncate(ws.Description, 40))
 			}
-			rows = append(rows, ansi.Truncate(line, 54, "…"))
+			rows = append(rows, ansi.Truncate(line, max(1, min(60, w-2)-6), "…"))
 			heights = append(heights, 1)
 		}
 		// The dialog's border and padding take 4 lines.
 		start, end := window(heights, a.picker.cursor, max(1, h-4))
-		dialog := dialogBoxStyle.Width(min(60, w)).Render(lipgloss.JoinVertical(lipgloss.Left, rows[start:end]...))
+		// Width leaves out the border, a cell on each side.
+		dialog := dialogBoxStyle.Width(min(60, w-2)).Render(lipgloss.JoinVertical(lipgloss.Left, rows[start:end]...))
 		return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, dialog)
 	})
 }
@@ -254,9 +257,13 @@ func (a *App) updateWSContentCreating(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (a *App) switchToBoard(board *model.Board) {
-	a.mode = modeBoard
 	a.board = boardModel{board: board}
 	a.loadBoard()
+	if a.err != nil {
+		a.board = boardModel{}
+		return
+	}
+	a.mode = modeBoard
 }
 
 func (a *App) viewWSContent() string {
@@ -270,7 +277,7 @@ func (a *App) viewWSContent() string {
 			if m.creating == "note" {
 				label = "New note title:"
 			}
-			dialog := dialogBoxStyle.Width(min(50, w)).Render(lipgloss.JoinVertical(lipgloss.Left,
+			dialog := dialogBoxStyle.Width(min(50, w-2)).Render(lipgloss.JoinVertical(lipgloss.Left,
 				formLabelActiveStyle.Render(label), "", "  "+m.input+"█", "",
 				helpStyle.Render("  enter: create   esc: cancel")))
 			return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, dialog)
