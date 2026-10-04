@@ -78,3 +78,54 @@ func TestBuildEmpty(t *testing.T) {
 		t.Errorf("empty graph = %+v", g)
 	}
 }
+
+// A note linking to another twice is one edge, and one connection each.
+func TestRepeatedLinksAreOneEdge(t *testing.T) {
+	src := Source{
+		Notes: []*model.Note{note("n1", "Alpha", ""), note("n2", "Beta", "")},
+		Links: []Link{
+			{SourceType: "note", SourceID: "n1", TargetType: "note", TargetID: "n2", Context: "first"},
+			{SourceType: "note", SourceID: "n1", TargetType: "note", TargetID: "n2", Context: "second"},
+		},
+	}
+	g := Build(src, "")
+	if len(g.Edges) != 1 || g.Edges[0].Context != "first" {
+		t.Errorf("edges = %+v", g.Edges)
+	}
+	if a := nodeByID(g, "n1"); a.Connections != 1 {
+		t.Errorf("Alpha connections = %d", a.Connections)
+	}
+}
+
+// Links both ways between two notes are one line; a self-link draws
+// nothing; nodes come out in the same order every time.
+func TestEdgesArePairsAndOrderIsStable(t *testing.T) {
+	src := Source{
+		Notes: []*model.Note{note("a", "Same", ""), note("b", "Same", ""), note("c", "Same", ""), note("d", "Lonely", "")},
+		Links: []Link{
+			{SourceType: "note", SourceID: "a", TargetType: "note", TargetID: "b"},
+			{SourceType: "note", SourceID: "b", TargetType: "note", TargetID: "a"},
+			{SourceType: "note", SourceID: "c", TargetType: "note", TargetID: "c"},
+		},
+	}
+	g := Build(src, "")
+	if len(g.Edges) != 1 {
+		t.Errorf("edges = %+v", g.Edges)
+	}
+	if c := nodeByID(g, "c"); c.Connections != 0 {
+		t.Errorf("a self-link counts %d connections", c.Connections)
+	}
+	first := ""
+	for _, n := range g.Nodes {
+		first += n.ID
+	}
+	for i := 0; i < 20; i++ {
+		order := ""
+		for _, n := range Build(src, "").Nodes {
+			order += n.ID
+		}
+		if order != first {
+			t.Fatalf("order %s, then %s", first, order)
+		}
+	}
+}

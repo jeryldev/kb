@@ -27,7 +27,7 @@ func TestGenerateHTMLBasic(t *testing.T) {
 	}{
 		{"doctype", "<!DOCTYPE html>"},
 		{"title", "<title>Test Graph</title>"},
-		{"d3 script", "d3js.org/d3.v7.min.js"},
+		{"d3 inline, so the page works offline", "https://d3js.org v7"},
 		{"svg element", `<svg id="graph">`},
 		{"node id n1", `"id":"n1"`},
 		{"node id n2", `"id":"n2"`},
@@ -148,5 +148,19 @@ func TestGenerateHTMLForceSimulation(t *testing.T) {
 		if !strings.Contains(html, f) {
 			t.Errorf("missing D3 force: %s", f)
 		}
+	}
+}
+
+// The page needs no network: D3 is in it, not fetched from a CDN.
+func TestTheGraphPageLoadsNothingFromTheNetwork(t *testing.T) {
+	page, err := GenerateHTML(&GraphData{Nodes: []Node{}, Edges: []Edge{}}, "g")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(page, "<script src=") {
+		t.Error("the page loads a script from elsewhere")
+	}
+	if strings.Contains(page, "> notes &middot;") {
+		t.Error("the count covers boards and cards too, not just notes")
 	}
 }
