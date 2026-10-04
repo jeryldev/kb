@@ -36,15 +36,6 @@ func TestJekyllFileName(t *testing.T) {
 	}
 }
 
-func TestJekyllPermalink(t *testing.T) {
-	date := time.Date(2026, 2, 24, 0, 0, 0, 0, time.UTC)
-	got := JekyllPermalink("my-post", date)
-	want := "/blog/2026/02/24/my-post/"
-	if got != want {
-		t.Errorf("JekyllPermalink() = %q, want %q", got, want)
-	}
-}
-
 func TestGenerateFrontMatter(t *testing.T) {
 	note := &model.Note{
 		Title: "My Great Post",
@@ -289,7 +280,7 @@ func TestResolveWikilinksByAnyNameAndHeading(t *testing.T) {
 	body := "[[Dual Transformation]], [[DT#Phase 2|phase two]], [[Private Thoughts]], [[Nowhere]], [[card:abc]]"
 	got := ResolveWikilinks(body, permalinks, resolver)
 	want := "[Dual Transformation](/blog/2026/05/13/dual-transformation/), " +
-		"[phase two](/blog/2026/05/13/dual-transformation/), Private Thoughts, Nowhere, abc"
+		"[phase two](/blog/2026/05/13/dual-transformation/#phase-2), Private Thoughts, Nowhere, abc"
 	if got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
@@ -300,16 +291,6 @@ func TestResolveWikilinksStaysOnOneLine(t *testing.T) {
 	got := ResolveWikilinks(body, nil, nameResolver{})
 	if got != "a stray [[ opener\nand Real link" {
 		t.Errorf("got %q", got)
-	}
-}
-
-func TestPermalinkFromPostPath(t *testing.T) {
-	got, ok := PermalinkFromPostPath("_posts/2026-05-13-dual-transformation.md")
-	if !ok || got != "/blog/2026/05/13/dual-transformation/" {
-		t.Errorf("got %q, %v", got, ok)
-	}
-	if _, ok := PermalinkFromPostPath("_posts/not-a-post.md"); ok {
-		t.Error("a path without a date should not give a permalink")
 	}
 }
 
@@ -352,6 +333,118 @@ func TestPermalinkPatterns(t *testing.T) {
 		got, ok := PermalinkFor(pattern, path)
 		if !ok || got != want {
 			t.Errorf("pattern %q: %q, want %q", pattern, got, want)
+		}
+	}
+}
+
+// A tag YAML would read as something other than text (a boolean, null, a
+// number, a date) is quoted, so the site gets the tag as written.
+func TestTagsYAMLWouldReadAsOtherValuesAreQuoted(t *testing.T) {
+	tags := []string{"true", "null", "2024", "yes", "no", "on", "1.5", "~", "2026-01-02", "0x1F", "go"}
+	note := &model.Note{Title: "t", Tags: strings.Join(tags, ",")}
+	fm := GenerateFrontMatter(note, time.Date(2026, 5, 13, 0, 0, 0, 0, time.UTC), false)
+	var parsed struct {
+		Tags []any `yaml:"tags"`
+	}
+	if err := yaml.Unmarshal([]byte(strings.Trim(fm, "-\n")), &parsed); err != nil {
+		t.Fatalf("%v\n%s", err, fm)
+	}
+	if len(parsed.Tags) != len(tags) {
+		t.Fatalf("tags = %v\n%s", parsed.Tags, fm)
+	}
+	for i, want := range tags {
+		if got, ok := parsed.Tags[i].(string); !ok || got != want {
+			t.Errorf("tag %q reads back as %#v\n%s", want, parsed.Tags[i], fm)
+		}
+	}
+	if !strings.Contains(fm, ", go]") {
+		t.Errorf("plain tags stay plain:\n%s", fm)
+	}
+}
+
+// kb fills in :year, :month, :day and :title; a pattern with anything
+// else (a Jekyll style name, :categories) would give links that go nowhere.
+func TestPermalinkPatternsKbCannotFillAreRefused(t *testing.T) {
+	for _, ok := range []string{"", "/blog/:year/:month/:day/:title/", "/:title.html", "/notes/:year-:month-:day-:title/"} {
+		if err := ValidatePermalink(ok); err != nil {
+			t.Errorf("%q: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"pretty", "date", "/:categories/:title/", "/:year/:i_month/:title/", "blog/:title"} {
+		if err := ValidatePermalink(bad); err == nil {
+			t.Errorf("%q: want an error", bad)
+		}
+	}
+}
+
+// The excerpt is the first line of prose: never a line of code, whatever
+// fence the code block uses.
+func TestTheExcerptSkipsCodeBlocks(t *testing.T) {
+	for body, want := range map[string]string{
+		"```go\nfmt.Println()\n```\nFirst prose line":           "First prose line",
+		"~~~\n```\nstill code\n~~~\nAfter the block":            "After the block",
+		"# Title\n\n````\n```\ncode\n```\n````\n\nThe real one": "The real one",
+	} {
+		if got := extractExcerpt(body); got != want {
+			t.Errorf("%q: excerpt %q, want %q", body, got, want)
+		}
+	}
+}
+
+// A link to a heading with no display text reads as Obsidian shows it.
+func TestALinkToAHeadingReadsAsObsidianShowsIt(t *testing.T) {
+	dt := &model.Note{ID: "id-dt", Title: "Dual Transformation"}
+	got := ResolveWikilinks("[[Nowhere#Part 2]] and [[DT#Phase 1]]", nil, nameResolver{"dt": dt})
+	if want := "Nowhere > Part 2 and Dual Transformation > Phase 1"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// A link to a heading in the same note reads as the heading; a link to a
+// published note's heading goes to the heading's anchor on the post.
+func TestHeadingLinksReadAndPointRight(t *testing.T) {
+	dt := &model.Note{ID: "id-dt", Title: "Dual Transformation"}
+	permalinks := map[string]string{"id-dt": "/blog/dt/"}
+	got := ResolveWikilinks("[[#Petty Cash]] and [[DT#Phase 2: Go!]]", permalinks, nameResolver{"dt": dt})
+	if want := "Petty Cash and [Dual Transformation > Phase 2: Go!](/blog/dt/#phase-2-go)"; got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+// An embedded note reads like a link to it; an embedded file, by its name.
+func TestEmbedsReadAsTheirNames(t *testing.T) {
+	other := &model.Note{ID: "id-o", Title: "Other Note"}
+	got := ResolveWikilinks("A ![[Other Note]] and ![[photo.png|300]] here", nil, nameResolver{"other note": other})
+	if want := "A Other Note and photo.png here"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// Text Liquid would run ({{ }}, {% %}) is kept as text, on Jekyll 3 and 4.
+func TestLiquidInANoteIsKeptAsText(t *testing.T) {
+	note := &model.Note{Title: "Templates", Body: "Use {{ .Name }} and {% if x %} here."}
+	post := GeneratePost(note, time.Date(2026, 5, 13, 0, 0, 0, 0, time.UTC), false, nil, nameResolver{})
+	if !strings.Contains(post, "{% raw %}Use {{ .Name }} and {% if x %} here.{% endraw %}") {
+		t.Errorf("post:\n%s", post)
+	}
+	plain := GeneratePost(&model.Note{Title: "Plain", Body: "no liquid"}, time.Now(), false, nil, nameResolver{})
+	if strings.Contains(plain, "raw") {
+		t.Errorf("a note with no Liquid should not be wrapped:\n%s", plain)
+	}
+}
+
+// The excerpt is prose: not a comment, a table or indented code.
+func TestTheExcerptSkipsWhatIsNotProse(t *testing.T) {
+	for body, want := range map[string]string{
+		"%% a comment %%\nProse":                   "Prose",
+		"%%\nmulti\nline\n%%\nProse":               "Prose",
+		"<!-- hidden -->\nProse":                   "Prose",
+		"<!--\nhidden\n-->\nProse":                 "Prose",
+		"| a | b |\n|---|---|\n| 1 | 2 |\n\nProse": "Prose",
+		"    indented code\n\nProse":               "Prose",
+	} {
+		if got := extractExcerpt(body); got != want {
+			t.Errorf("%q: excerpt %q, want %q", body, got, want)
 		}
 	}
 }
