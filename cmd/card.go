@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"text/tabwriter"
@@ -18,7 +19,8 @@ var cardCmd = &cobra.Command{
 
 A card is named by its id, the ^id at the end of its line in the board's
 file, or by the first 4 or more characters of it. A card that is not on
-the current board is looked for on every board.`,
+the current board is looked for on every board, unless -B names the
+board to look on.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		board, err := currentBoard()
@@ -150,7 +152,7 @@ var cardAddCmd = &cobra.Command{
 
 		card, err := db.AddCard(board.ID, lane.Name, args[0], fields, force)
 		if err != nil {
-			return err
+			return withForceHint(err)
 		}
 		if jsonOutput {
 			return printJSON(toCardJSON(card))
@@ -225,7 +227,7 @@ var cardMoveCmd = &cobra.Command{
 		}
 		force, _ := cmd.Flags().GetBool("force")
 		if err := db.MoveCard(card.BoardID, card.ID, lane.Name, before, force); err != nil {
-			return err
+			return withForceHint(err)
 		}
 		if card, err = db.GetCard(card.BoardID, card.ID); err != nil {
 			return err
@@ -271,7 +273,13 @@ var cardDeleteCmd = &cobra.Command{
 			return err
 		}
 		force, _ := cmd.Flags().GetBool("force")
-		if err := confirm(cmd, force, fmt.Sprintf("Delete card %q? (kb card archive keeps it)", card.Title)); err != nil {
+		// The card may be on another board than the current one (see
+		// resolveCard), so the question names it.
+		boardName := card.BoardID
+		if b, err := db.GetBoard(card.BoardID); err == nil {
+			boardName = b.Name
+		}
+		if err := confirm(cmd, force, fmt.Sprintf("Delete card %q on board %q? (kb card archive keeps it)", card.Title, boardName)); err != nil {
 			return err
 		}
 		if err := db.DeleteCard(card.BoardID, card.ID); err != nil {
@@ -356,4 +364,14 @@ func changedAny(cmd *cobra.Command, names ...string) bool {
 		}
 	}
 	return false
+}
+
+// withForceHint says how to go over a column's card limit from the
+// command line.
+func withForceHint(err error) error {
+	var wip *fstore.WIPLimitError
+	if errors.As(err, &wip) {
+		return fmt.Errorf("%w (use --force to go over it)", err)
+	}
+	return err
 }

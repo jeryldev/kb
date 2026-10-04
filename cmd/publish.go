@@ -1,15 +1,19 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/jeryldev/kb/internal/fstore"
 	"github.com/jeryldev/kb/internal/model"
 	"github.com/jeryldev/kb/internal/publish"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 var publishCmd = &cobra.Command{
@@ -29,8 +33,13 @@ A note named like a subcommand (list, setup, delete) goes after --:
 		if err != nil {
 			return err
 		}
+		// kb has only the name of a note iCloud has not downloaded; its
+		// empty body must not become the post.
+		if db.NotDownloaded(note.ID) {
+			return fmt.Errorf("%s %w", note.Path, fstore.ErrNotDownloaded)
+		}
 		targetName, _ := cmd.Flags().GetString("target")
-		target, err := resolvePublishTarget(targetName)
+		target, err := resolvePublishTarget(targetName, note)
 		if err != nil {
 			return err
 		}
@@ -50,17 +59,22 @@ A note named like a subcommand (list, setup, delete) goes after --:
 			}
 		}
 		if relPath == "" {
-			relPath = freePostPath(target.BasePath, target.PostsDir, note, date, posts)
+			if relPath, err = freePostPath(target.BasePath, target.PostsDir, note, date, posts); err != nil {
+				return err
+			}
 		}
 
 		// Link only to posts that are out: a draft's URL does not exist yet.
+		// A site served below its domain (GitHub project pages) says so in
+		// its _config.yml baseurl, which every link starts with.
+		baseurl := siteBaseurl(target.BasePath)
 		permalinks := make(map[string]string, len(posts))
 		for noteID, post := range posts {
 			if post.Draft {
 				continue
 			}
 			if permalink, ok := publish.PermalinkFor(target.Permalink, post.Path); ok {
-				permalinks[noteID] = permalink
+				permalinks[noteID] = baseurl + permalink
 			}
 		}
 
@@ -70,10 +84,9 @@ A note named like a subcommand (list, setup, delete) goes after --:
 		if dryRun {
 			if jsonOutput {
 				return printJSON(struct {
-					FilePath string `json:"file_path"`
-					Content  string `json:"content"`
-					Draft    bool   `json:"draft"`
-				}{fullPath, content, draft})
+					publicationJSON
+					Content string `json:"content"`
+				}{publicationJSON{Note: note.Slug, Target: target.Name, FilePath: relPath, FullPath: fullPath, Draft: draft}, content})
 			}
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "Would write to: %s\n\n", fullPath)
@@ -81,18 +94,19 @@ A note named like a subcommand (list, setup, delete) goes after --:
 			return nil
 		}
 
-		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
-			return fmt.Errorf("creating directory for %s: %w", fullPath, err)
-		}
-		if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
-			return fmt.Errorf("writing %s: %w", fullPath, err)
-		}
+		// The note records the post first: a post written but not
+		// recorded would look like someone else's file to the next
+		// publish, which would add a second post beside it. A record whose
+		// post failed to write is mended by publishing again.
 		if err := db.RecordPublish(note.ID, target.Name, relPath, draft); err != nil {
-			return fmt.Errorf("wrote %s but could not record it in the note: %w", fullPath, err)
+			return fmt.Errorf("could not record the post in the note, so nothing was published: %w", err)
+		}
+		if err := writeFileAtomic(fullPath, []byte(content)); err != nil {
+			return fmt.Errorf("writing %s: %w; publish again to write it", fullPath, err)
 		}
 
 		if jsonOutput {
-			return printJSON(publicationJSON{Note: note.Slug, Target: target.Name, FilePath: relPath, Draft: draft})
+			return printJSON(publicationJSON{Note: note.Slug, Target: target.Name, FilePath: relPath, FullPath: fullPath, Draft: draft})
 		}
 		label := "Published"
 		if draft {
@@ -145,7 +159,7 @@ var publishListCmd = &cobra.Command{
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if targetName, _ := cmd.Flags().GetString("target"); targetName != "" {
-			target, err := resolvePublishTarget(targetName)
+			target, err := resolvePublishTarget(targetName, nil)
 			if err != nil {
 				return err
 			}
@@ -191,7 +205,7 @@ var publishDeleteCmd = &cobra.Command{
 	Short: "Forget a publish target (its posts and the notes' history stay)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		target, err := resolvePublishTarget(args[0])
+		target, err := resolvePublishTarget(args[0], nil)
 		if err != nil {
 			return err
 		}
@@ -206,8 +220,9 @@ var publishDeleteCmd = &cobra.Command{
 	},
 }
 
-// resolvePublishTarget finds a target by name; with no name, the only one.
-func resolvePublishTarget(name string) (*model.PublishTarget, error) {
+// resolvePublishTarget finds a target by name; with no name, the only
+// one, or the only one set up for the note's workspace.
+func resolvePublishTarget(name string, note *model.Note) (*model.PublishTarget, error) {
 	if name != "" {
 		return db.GetPublishTarget(name)
 	}
@@ -218,13 +233,61 @@ func resolvePublishTarget(name string) (*model.PublishTarget, error) {
 	case 1:
 		return targets[0], nil
 	}
+	var mine []*model.PublishTarget
+	for _, t := range targets {
+		if note != nil && t.WorkspaceID != nil && *t.WorkspaceID == note.WorkspaceID {
+			mine = append(mine, t)
+		}
+	}
+	if len(mine) == 1 {
+		return mine[0], nil
+	}
 	return nil, fmt.Errorf("there are %d publish targets; choose one with --target", len(targets))
+}
+
+// siteBaseurl is the baseurl in the site's _config.yml, or "".
+func siteBaseurl(site string) string {
+	data, err := os.ReadFile(filepath.Join(site, "_config.yml"))
+	if err != nil {
+		return ""
+	}
+	var cfg struct {
+		Baseurl string `yaml:"baseurl"`
+	}
+	if yaml.Unmarshal(data, &cfg) != nil {
+		return ""
+	}
+	return strings.TrimRight(cfg.Baseurl, "/")
+}
+
+// writeFileAtomic writes a file whole or not at all, through a temporary
+// file beside it, so a site rebuilding on changes never reads half a post.
+func writeFileAtomic(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".kb-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // freePostPath is the post path for a note's first publish, with -2, -3
 // added to the slug when another note's post (one renamed since, say) or a
 // file kb did not write already has the name.
-func freePostPath(basePath, postsDir string, note *model.Note, date time.Time, posts map[string]fstore.Post) string {
+func freePostPath(basePath, postsDir string, note *model.Note, date time.Time, posts map[string]fstore.Post) (string, error) {
 	taken := map[string]bool{}
 	for noteID, post := range posts {
 		if noteID != note.ID {
@@ -234,8 +297,13 @@ func freePostPath(basePath, postsDir string, note *model.Note, date time.Time, p
 	slug := note.Slug
 	for n := 2; ; n++ {
 		relPath := publish.PostFilePath(postsDir, slug, date)
-		if _, err := os.Stat(filepath.Join(basePath, relPath)); !taken[relPath] && os.IsNotExist(err) {
-			return relPath
+		_, err := os.Stat(filepath.Join(basePath, relPath))
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			// Not a name in use but a posts folder kb cannot use.
+			return "", fmt.Errorf("checking %s: %w", filepath.Join(basePath, relPath), err)
+		}
+		if !taken[relPath] && err != nil {
+			return relPath, nil
 		}
 		slug = fmt.Sprintf("%s-%d", note.Slug, n)
 	}
@@ -250,7 +318,7 @@ func init() {
 	publishSetupCmd.Flags().StringP("path", "p", "", "The site's folder (absolute, or starting with ~/)")
 	publishSetupCmd.Flags().String("posts-dir", "_posts", "Posts folder within the site")
 	publishSetupCmd.Flags().StringP("workspace", "w", "", "Workspace the target is for")
-	publishSetupCmd.Flags().String("permalink", "", "The site's permalink pattern, for links between posts (default "+publish.DefaultPermalink+")")
+	publishSetupCmd.Flags().String("permalink", "", "The site's permalink pattern, for links between posts, from :year, :month, :day and :title (default "+publish.DefaultPermalink+")")
 
 	publishListCmd.Flags().StringP("target", "t", "", "List this target's posts")
 

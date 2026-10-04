@@ -88,10 +88,11 @@ text, or in a card's title or description:
   [[FAR/Cash and Cash Equivalents]]      by file path, for same-named notes
   [[study]]                              a board, by its name
 
-How kb finds what a link names, first match wins: the note's slug, its
-title, its file name or path, one of its aliases, then the slugified name;
-boards by name come after notes. Notes are files, so these are the same
-rules Obsidian uses.
+How kb finds what a link names, first match wins: a file name or path
+(as Obsidian links), the note's slug, one of its aliases, its title
+(kb's own frontmatter title: key), then the slugified name; boards by
+name come after notes. So a link Obsidian opens, kb follows to the same
+note.
 
 Aliases: other names a note answers to, in its frontmatter:
 
@@ -144,7 +145,9 @@ with "kanban-plugin: board" in its frontmatter is a board, wherever it is.
   kb board delete study                  to the vault's .trash (asks first)
 
 Which board a command works on: --board/-B, else $KB_BOARD, else the
-board named after the folder you are in or after its git repository.
+first board that exists named after the dev tmux session
+($TMUX_SESSION_NAME, without its "dev-"), the folder you are in, or its
+git repository.
 
 Cards
 
@@ -161,10 +164,12 @@ Cards
   kb card delete <id> -B study           off the board (asks first)
 
 A card's <id> is the "^id" at the end of its line in the file; kb accepts
-its first 4 characters or more, and finds it on any board.
+its first 4 characters or more: on the current board, then on any
+board (with -B, only on that board).
 
 Priority is low, medium, high or urgent; medium is the default. Labels
-become #tags, with spaces as dashes ("needs review" is #needs-review).
+become #tags; spaces and punctuation a tag cannot hold become dashes
+("needs review" is #needs-review, "q&a" is #q-a).
 
 Columns
 
@@ -211,8 +216,20 @@ Board
   d          archive card        D       delete card    (both ask first)
   /          filter by words or label (Esc stops typing, keeps the filter)
   1 2 3 4    only urgent / high / medium / low cards (again to clear)
-  Esc        clear the filters   b       back           ?   help
-  q          quit
+  Esc        clear the filters   r       read the board again
+  b          back                ?       help           q   quit
+
+The board follows its file: a change made in an editor, the Kanban
+plugin or another kb shows on the next key (the key after a typed
+filter, a move or a question). A board whose file is moved or deleted
+says so and goes back to the workspace.
+
+In the card editor, a field left alone is saved as the file had it. If a
+card changed on disk while you edited it, saving stops and says so: the
+fields you typed in keep your text, the others show the other change.
+Save again to keep that, or Esc to drop your edits; Esc on a form you
+typed in asks first. A card gone from the file can be saved as a new
+card, and a full column asks before taking one more.
 
 Card view
   e          edit                d / D   archive / delete
@@ -262,16 +279,18 @@ published (where kb publish put it). Other keys are left as they are.
 
 On this machine only
   ~/.config/kb/publish.yml            sites set up with kb publish setup
-  ~/.config/kb/workspace-paths.yml    workspace folders (kb workspace -p)
+  ~/.config/kb/workspace-paths.yml    workspace folders (--path of kb workspace create and edit)
   ~/.cache/kb/locks                   locks that keep two kb runs apart
 
 Environment
   KB_VAULT        the vault folder
   KB_BOARD        the board card and column commands use
+  TMUX_SESSION_NAME   set by dev; names the board when KB_BOARD is not
   KB_BOARDS_DIR   where kb board create puts boards ("Boards")
   KB_DAILY_DIR    where kb daily puts daily notes ("daily")
   VISUAL, EDITOR  the editor kb open and kb daily start
   XDG_CONFIG_HOME, XDG_CACHE_HOME   instead of ~/.config and ~/.cache
+  XDG_DATA_HOME   where kb 0.3's kb.db is looked for (~/.local/share)
 
 Set them in ~/.zshenv rather than ~/.zshrc: .zshrc is read only by
 interactive shells, so tmux popups and scripts would not see them.`,
@@ -298,7 +317,16 @@ The fields
   card       id, board, column, title, description, priority, labels
              (list), external_id, archived
   column     name, position, wip_limit, cards
-  workspace  id, name, kind, description, path, position
+  workspace  id, name, kind, description, path, position; workspace
+             show adds boards (names) and notes (slugs)
+  publish    note, target, file_path (in the site), full_path, draft;
+             --dry-run adds content
+  graph      nodes (id, label, type, slug, workspace_id, connections,
+             outside) and edges (source, target, context); a card's
+             node id is <board path>#<card id>
+  note delete adds trashed (where the file went); daily --json prints
+  the note instead of opening it; kb import prints text only. Times are
+  RFC 3339 in this machine's time zone.
 
 With jq:
   kb cards -B study --json | jq -r '.[] | select(.priority == "urgent") | .title'

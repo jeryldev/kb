@@ -3,12 +3,15 @@ package cmd
 import (
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/jeryldev/kb/internal/vault"
 	"github.com/spf13/cobra"
 )
 
@@ -321,7 +324,7 @@ func TestStartupOpensTheVaultAndWaitsForAnImport(t *testing.T) {
 
 	db = nil
 	os.MkdirAll(filepath.Join(dir, "data", "kb"), 0o755)
-	os.WriteFile(filepath.Join(dir, "data", "kb", "kb.db"), nil, 0o644)
+	fakeLegacyDB(t, filepath.Join(dir, "data", "kb", "kb.db"))
 	_, err := executeCmdErr(t, "notes")
 	if err == nil || !strings.Contains(err.Error(), "kb import") {
 		t.Errorf("err = %v, want it to say to run kb import", err)
@@ -492,7 +495,7 @@ func TestVersionWorksWhileAnImportWaits(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dir)
 	os.MkdirAll(filepath.Join(dir, "kb"), 0o755)
-	os.WriteFile(filepath.Join(dir, "kb", "kb.db"), nil, 0o644)
+	fakeLegacyDB(t, filepath.Join(dir, "kb", "kb.db"))
 	db = nil
 	t.Cleanup(func() { db = nil })
 	if out := executeCmd(t, "--version"); !strings.HasPrefix(out, "kb version ") {
@@ -549,5 +552,464 @@ func TestTheFullScreenViewExplainsAMissingTerminal(t *testing.T) {
 	_, err := executeCmdErr(t)
 	if !errors.Is(err, errNoTerminal) || !strings.Contains(err.Error(), "kb notes") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// fakeLegacyDB writes a file that starts as an SQLite database does, which
+// is all kb looks at before it stops for an import.
+func fakeLegacyDB(t *testing.T, path string) {
+	t.Helper()
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	if err := os.WriteFile(path, append([]byte("SQLite format 3\x00"), make([]byte, 84)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A kb.db that is empty or not a database (a failed copy, a stray file)
+// holds nothing to import, so it never stops kb.
+func TestAKbDBThatIsNoDatabaseDoesNotStopKb(t *testing.T) {
+	for name, content := range map[string]string{"empty": "", "damaged": "not a database at all"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("KB_VAULT", filepath.Join(dir, "vault"))
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+			t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+			t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "data"))
+			db = nil
+			t.Cleanup(func() { db = nil })
+			os.MkdirAll(filepath.Join(dir, "data", "kb"), 0o755)
+			os.WriteFile(filepath.Join(dir, "data", "kb", "kb.db"), []byte(content), 0o644)
+
+			executeCmd(t, "notes", "create", "Still works")
+			db = nil
+			_, err := executeCmdErr(t, "import")
+			if err == nil || !strings.Contains(err.Error(), "not an SQLite database") {
+				t.Errorf("import: err = %v, want it to say the file is not a database", err)
+			}
+		})
+	}
+}
+
+// An SQLite file that is not kb 0.3's says so, and how to get past it.
+func TestImportingADatabaseThatIsNotKbsSaysSo(t *testing.T) {
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		missing(t, "sqlite3 is not installed")
+	}
+	dir := t.TempDir()
+	t.Setenv("KB_VAULT", filepath.Join(dir, "vault"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "data"))
+	db = nil
+	t.Cleanup(func() { db = nil })
+	dbPath := filepath.Join(dir, "data", "kb", "kb.db")
+	os.MkdirAll(filepath.Dir(dbPath), 0o755)
+	build := exec.Command("sqlite3", dbPath, "CREATE TABLE other (x);")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	_, err := executeCmdErr(t, "import")
+	if err == nil || !strings.Contains(err.Error(), "not a kb 0.3 database") || !strings.Contains(err.Error(), "mv ") {
+		t.Errorf("err = %v, want it to say this is not kb 0.3's database and how to move it aside", err)
+	}
+}
+
+// A permalink kb cannot fill in is refused when the site is set up, not
+// discovered later as broken links.
+func TestAPermalinkKbCannotFillIsRefusedAtSetup(t *testing.T) {
+	setupTestDB(t)
+	site := t.TempDir()
+	if _, err := executeCmdErr(t, "publish", "setup", "site", "--path", site, "--permalink", "pretty"); err == nil {
+		t.Error("want an error for a Jekyll style name")
+	}
+	if _, err := executeCmdErr(t, "publish", "setup", "site", "--path", site, "--permalink", "/:categories/:title/"); err == nil {
+		t.Error("want an error for :categories")
+	}
+	if len(db.ListPublishTargets()) != 0 {
+		t.Error("a target was saved")
+	}
+}
+
+// A dry run reports the post's path as a publish does: relative to the
+// site, with the full path beside it.
+func TestADryRunReportsThePathAsAPublishDoes(t *testing.T) {
+	setupTestDB(t)
+	site := t.TempDir()
+	executeCmd(t, "publish", "setup", "site", "--path", site)
+	executeCmd(t, "notes", "create", "Post", "--body", "text")
+	var dry, real struct {
+		FilePath string `json:"file_path"`
+		FullPath string `json:"full_path"`
+	}
+	if err := json.Unmarshal([]byte(executeCmd(t, "publish", "post", "--dry-run", "--json")), &dry); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(executeCmd(t, "publish", "post", "--json")), &real); err != nil {
+		t.Fatal(err)
+	}
+	if dry != real || filepath.IsAbs(dry.FilePath) || dry.FullPath != filepath.Join(site, dry.FilePath) {
+		t.Errorf("dry run %+v, publish %+v", dry, real)
+	}
+}
+
+// A card found on a board other than the current one is deleted only once
+// the question has named that board.
+func TestDeletingACardOnAnotherBoardNamesTheBoard(t *testing.T) {
+	setupTestDB(t)
+	executeCmd(t, "boards", "create", "Home")
+	executeCmd(t, "boards", "create", "Work")
+	var card struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(executeCmd(t, "card", "add", "Fix sink", "-B", "Home", "--json")), &card); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KB_BOARD", "Work")
+	rootCmd.SetIn(strings.NewReader("n\n"))
+	defer rootCmd.SetIn(nil)
+	out, err := executeCmdErr(t, "card", "delete", card.ID)
+	if !errors.Is(err, errCancelled) {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(out, `on board "Home"`) {
+		t.Errorf("the question does not name the board:\n%s", out)
+	}
+}
+
+// workspace show --json holds what the text shows: the boards and notes.
+func TestWorkspaceShowJSONListsItsBoardsAndNotes(t *testing.T) {
+	setupTestDB(t)
+	executeCmd(t, "workspace", "create", "Work")
+	executeCmd(t, "boards", "create", "Sprint", "-w", "Work")
+	executeCmd(t, "notes", "create", "Plan", "-w", "Work")
+	var got struct {
+		Name   string   `json:"name"`
+		Boards []string `json:"boards"`
+		Notes  []string `json:"notes"`
+	}
+	if err := json.Unmarshal([]byte(executeCmd(t, "workspace", "show", "Work", "--json")), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "Work" || strings.Join(got.Boards, ",") != "Sprint" || strings.Join(got.Notes, ",") != "plan" {
+		t.Errorf("got %+v", got)
+	}
+}
+
+// --open and --json ask for two different things; kb says so rather than
+// silently doing one.
+func TestGraphOpenAndJSONTogetherIsAnError(t *testing.T) {
+	setupTestDB(t)
+	if _, err := executeCmdErr(t, "graph", "--open", "--json"); err == nil {
+		t.Error("want an error")
+	}
+}
+
+// The board pick: --board, else $KB_BOARD, else the first board that
+// exists named after the dev tmux session, the folder, or the repository.
+func TestTheBoardPickOrder(t *testing.T) {
+	setupTestDB(t)
+	for _, name := range []string{"flagged", "env", "session", "folder"} {
+		createTestBoard(t, name)
+		createTestCard(t, testLanes(t, name)[0], "card on "+name, "")
+	}
+	dir := filepath.Join(t.TempDir(), "folder")
+	os.MkdirAll(dir, 0o755)
+	t.Chdir(dir)
+	pick := func() string {
+		t.Helper()
+		out, err := executeCmdErr(t, "cards")
+		if err != nil {
+			return err.Error()
+		}
+		for _, name := range []string{"flagged", "env", "session", "folder"} {
+			if strings.Contains(out, "card on "+name) {
+				return name
+			}
+		}
+		return out
+	}
+	t.Setenv("KB_BOARD", "")
+	t.Setenv("TMUX_SESSION_NAME", "")
+	if got := pick(); got != "folder" {
+		t.Errorf("folder only: %s", got)
+	}
+	t.Setenv("TMUX_SESSION_NAME", "dev-session")
+	if got := pick(); got != "session" {
+		t.Errorf("with a tmux session: %s", got)
+	}
+	t.Setenv("TMUX_SESSION_NAME", "dev-no-such-board")
+	if got := pick(); got != "folder" {
+		t.Errorf("a session with no board falls through to the folder: %s", got)
+	}
+	t.Setenv("KB_BOARD", "env")
+	if got := pick(); got != "env" {
+		t.Errorf("with $KB_BOARD: %s", got)
+	}
+	out, err := executeCmdErr(t, "cards", "-B", "flagged")
+	if err != nil || !strings.Contains(out, "card on flagged") {
+		t.Errorf("with --board: %v\n%s", err, out)
+	}
+}
+
+// card move --before puts the card just above the other one, and refuses
+// a card that is not in the target column.
+func TestCardMoveBefore(t *testing.T) {
+	setupTestDB(t)
+	executeCmd(t, "boards", "create", "B")
+	add := func(title, col string) string {
+		var c struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(executeCmd(t, "card", "add", title, "-B", "B", "-c", col, "--json")), &c); err != nil {
+			t.Fatal(err)
+		}
+		return c.ID
+	}
+	first := add("first", "Done")
+	second := add("second", "Done")
+	mover := add("mover", "Todo")
+	executeCmd(t, "card", "move", mover, "Done", "--before", second, "-B", "B")
+	var cards []struct {
+		Title string `json:"title"`
+	}
+	if err := json.Unmarshal([]byte(executeCmd(t, "cards", "-B", "B", "-c", "Done", "--json")), &cards); err != nil {
+		t.Fatal(err)
+	}
+	var order []string
+	for _, c := range cards {
+		order = append(order, c.Title)
+	}
+	if strings.Join(order, ",") != "first,mover,second" {
+		t.Errorf("order = %v", order)
+	}
+	if _, err := executeCmdErr(t, "card", "move", first, "Todo", "--before", second, "-B", "B"); err == nil {
+		t.Error("--before a card in another column: want an error")
+	}
+}
+
+// kb 0.3 killed before its first checkpoint leaves kb.db empty and every
+// board in kb.db-wal: that still waits for an import, and kb never says to
+// remove it.
+func TestAnEmptyKbDBWithAWALStillWaitsForTheImport(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("KB_VAULT", filepath.Join(dir, "vault"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "data"))
+	db = nil
+	t.Cleanup(func() { db = nil })
+	dbPath := filepath.Join(dir, "data", "kb", "kb.db")
+	os.MkdirAll(filepath.Dir(dbPath), 0o755)
+	os.WriteFile(dbPath, nil, 0o644)
+	os.WriteFile(dbPath+"-wal", []byte("wal frames"), 0o644)
+	if _, err := executeCmdErr(t, "notes"); err == nil || !strings.Contains(err.Error(), "kb import") {
+		t.Errorf("notes: err = %v, want it to wait for the import", err)
+	}
+	db = nil
+	_, err := executeCmdErr(t, "import")
+	if err == nil || strings.Contains(err.Error(), "rm ") || !strings.Contains(err.Error(), "-wal") {
+		t.Errorf("import: err = %v, want the WAL explained and no rm", err)
+	}
+}
+
+// A posts folder kb cannot use is an error, not an endless search for a
+// free post name.
+func TestPublishingIntoAnUnusablePostsFolderFails(t *testing.T) {
+	setupTestDB(t)
+	site := t.TempDir()
+	executeCmd(t, "publish", "setup", "site", "--path", site)
+	os.WriteFile(filepath.Join(site, "_posts"), []byte("a file, not a folder"), 0o644)
+	executeCmd(t, "notes", "create", "Post", "--body", "text")
+	done := make(chan error, 1)
+	go func() { _, err := executeCmdErr(t, "publish", "post", "--dry-run"); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("want an error")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("publish did not return")
+	}
+}
+
+// A note still in iCloud is not published: kb has only its name, and its
+// empty body would replace the post.
+func TestANoteInICloudIsNotPublished(t *testing.T) {
+	setupTestDB(t)
+	site := t.TempDir()
+	executeCmd(t, "publish", "setup", "site", "--path", site)
+	os.WriteFile(filepath.Join(db.Vault().Root(), "Remote.md"), []byte("the real text\n"), 0o644)
+	vault.IsDataless = func(fi fs.FileInfo) bool { return fi.Name() == "Remote.md" }
+	t.Cleanup(func() { vault.IsDataless = func(fs.FileInfo) bool { return false } })
+	db.Reload()
+	if _, err := executeCmdErr(t, "publish", "remote"); err == nil || !strings.Contains(err.Error(), "iCloud") {
+		t.Errorf("err = %v", err)
+	}
+	if posts, _ := filepath.Glob(filepath.Join(site, "_posts", "*")); len(posts) != 0 {
+		t.Errorf("posts = %v", posts)
+	}
+}
+
+// When the note cannot record where it was published, no post is left
+// behind for the next publish to duplicate.
+func TestAPublishThatCannotBeRecordedWritesNoPost(t *testing.T) {
+	setupTestDB(t)
+	site := t.TempDir()
+	executeCmd(t, "publish", "setup", "site", "--path", site)
+	dir := filepath.Join(db.Vault().Root(), "locked")
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(filepath.Join(dir, "Locked.md"), []byte("---\ncreated: 2026-09-01\n---\ntext\n"), 0o644)
+	db.Reload()
+	os.Chmod(dir, 0o555)
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	if _, err := executeCmdErr(t, "publish", "locked"); err == nil {
+		t.Fatal("want an error")
+	}
+	if posts, _ := filepath.Glob(filepath.Join(site, "_posts", "*")); len(posts) != 0 {
+		t.Errorf("a post was left: %v", posts)
+	}
+	os.Chmod(dir, 0o755)
+	db.Reload()
+	executeCmd(t, "publish", "locked")
+	if posts, _ := filepath.Glob(filepath.Join(site, "_posts", "*")); len(posts) != 1 {
+		t.Errorf("posts after a retry = %v", posts)
+	}
+}
+
+// Links between posts carry the site's baseurl, read from its _config.yml.
+func TestLinksBetweenPostsCarryTheSitesBaseurl(t *testing.T) {
+	setupTestDB(t)
+	site := t.TempDir()
+	os.WriteFile(filepath.Join(site, "_config.yml"), []byte("title: my site\nbaseurl: /repo\n"), 0o644)
+	executeCmd(t, "publish", "setup", "site", "--path", site, "--permalink", "/posts/:title/")
+	executeCmd(t, "notes", "create", "First", "--body", "one")
+	executeCmd(t, "notes", "create", "Second", "--body", "see [[First]]")
+	executeCmd(t, "publish", "first")
+	executeCmd(t, "publish", "second")
+	posts, _ := filepath.Glob(filepath.Join(site, "_posts", "*second.md"))
+	data, _ := os.ReadFile(posts[0])
+	if !strings.Contains(string(data), "[First](/repo/posts/first/)") {
+		t.Errorf("post:\n%s", data)
+	}
+}
+
+// With several sites and no --target, a note goes to the site set up for
+// its workspace, when exactly one is.
+func TestANoteGoesToItsWorkspacesSite(t *testing.T) {
+	setupTestDB(t)
+	executeCmd(t, "workspace", "create", "Writing")
+	work, blog := t.TempDir(), t.TempDir()
+	executeCmd(t, "publish", "setup", "work", "--path", work)
+	executeCmd(t, "publish", "setup", "blog", "--path", blog, "-w", "Writing")
+	executeCmd(t, "notes", "create", "Essay", "--body", "words", "-w", "Writing")
+	executeCmd(t, "publish", "essay")
+	if posts, _ := filepath.Glob(filepath.Join(blog, "_posts", "*essay.md")); len(posts) != 1 {
+		t.Errorf("blog posts = %v", posts)
+	}
+	executeCmd(t, "notes", "create", "Memo", "--body", "words")
+	if _, err := executeCmdErr(t, "publish", "memo"); err == nil {
+		t.Error("a note no site is set up for, with two sites: want an error")
+	}
+}
+
+// JSON times are all in one zone, local time with its offset.
+func TestJSONTimesShareAZone(t *testing.T) {
+	setupTestDB(t)
+	os.WriteFile(filepath.Join(db.Vault().Root(), "Z.md"), []byte("---\ncreated: 2026-10-04T04:53:56Z\n---\nbody\n"), 0o644)
+	db.Reload()
+	var n struct {
+		CreatedAt string `json:"created_at"`
+		UpdatedAt string `json:"updated_at"`
+	}
+	if err := json.Unmarshal([]byte(executeCmd(t, "note", "show", "z", "--json")), &n); err != nil {
+		t.Fatal(err)
+	}
+	if n.CreatedAt[19:] != n.UpdatedAt[19:] {
+		t.Errorf("zones differ: %s and %s", n.CreatedAt, n.UpdatedAt)
+	}
+}
+
+// Column names can hold commas; reorder takes them as separate arguments.
+func TestReorderTakesColumnsAsArguments(t *testing.T) {
+	setupTestDB(t)
+	executeCmd(t, "boards", "create", "B")
+	executeCmd(t, "column", "add", "Q&A, later", "-B", "B")
+	lanes := testLanes(t, "B")
+	var names []string
+	for i := len(lanes) - 1; i >= 0; i-- {
+		names = append(names, lanes[i].Name)
+	}
+	executeCmd(t, append([]string{"column", "reorder", "-B", "B"}, names...)...)
+	if got := testLanes(t, "B")[0].Name; got != "Q&A, later" {
+		t.Errorf("first column = %q", got)
+	}
+}
+
+// KB_DAILY_DIR may be a path in the vault, absolute or not; outside it is
+// an error that says so.
+func TestTheDailyFolderSetting(t *testing.T) {
+	setupTestDB(t)
+	root := db.Vault().Root()
+	t.Setenv("KB_DAILY_DIR", filepath.Join(root, "journal"))
+	var n struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(executeCmd(t, "daily", "--date", "2026-10-04", "--json")), &n); err != nil {
+		t.Fatal(err)
+	}
+	if n.Path != "journal/2026-10-04.md" {
+		t.Errorf("path = %q", n.Path)
+	}
+	t.Setenv("KB_DAILY_DIR", "../elsewhere")
+	if _, err := executeCmdErr(t, "daily", "--date", "2026-10-04", "--json"); err == nil || !strings.Contains(err.Error(), "outside the vault") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+// note delete --json says where the file went.
+func TestNoteDeleteJSONSaysWhereTheFileWent(t *testing.T) {
+	setupTestDB(t)
+	executeCmd(t, "notes", "create", "Gone")
+	var out struct {
+		Trashed string `json:"trashed"`
+	}
+	if err := json.Unmarshal([]byte(executeCmd(t, "notes", "delete", "gone", "-f", "--json")), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Trashed != ".trash/Gone.md" {
+		t.Errorf("trashed = %q", out.Trashed)
+	}
+}
+
+// note show on a note still in iCloud says its text is not here yet.
+func TestShowingANoteInICloudSaysSo(t *testing.T) {
+	setupTestDB(t)
+	os.WriteFile(filepath.Join(db.Vault().Root(), "Remote.md"), []byte("text\n"), 0o644)
+	vault.IsDataless = func(fi fs.FileInfo) bool { return fi.Name() == "Remote.md" }
+	t.Cleanup(func() { vault.IsDataless = func(fs.FileInfo) bool { return false } })
+	db.Reload()
+	out := executeCmd(t, "note", "show", "remote")
+	if !strings.Contains(out, "iCloud") {
+		t.Errorf("output:\n%s", out)
+	}
+}
+
+// graph --open writes one page in kb's cache folder, replaced each time,
+// not a new temporary file per run.
+func TestGraphOpenReusesOnePage(t *testing.T) {
+	setupTestDB(t)
+	cache := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cache)
+	bin := t.TempDir()
+	for _, name := range []string{"open", "xdg-open"} {
+		os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	executeCmd(t, "notes", "create", "A", "--body", "[[B]]")
+	executeCmd(t, "graph", "--open")
+	executeCmd(t, "graph", "--open")
+	pages, _ := filepath.Glob(filepath.Join(cache, "kb", "*.html"))
+	if len(pages) != 1 {
+		t.Errorf("pages = %v", pages)
 	}
 }
