@@ -11,7 +11,7 @@ brew tap jeryldev/tap
 brew install kb
 ```
 
-Or build from source (Go 1.24+):
+Or build from source (Go 1.25+):
 
 ```bash
 go install github.com/jeryldev/kb@latest
@@ -37,7 +37,7 @@ kb daily                               # today's daily note
 kb                                     # the TUI
 ```
 
-Card and column commands work on one board: `--board`/`-B`, or `$KB_BOARD`, or else the board named after the folder you are in, or after its git repository (also from a worktree). So inside `~/code/sprint-1` plain `kb cards` is enough.
+Card and column commands work on one board: `--board`/`-B`, or `$KB_BOARD`, or else the first board that exists named after the dev tmux session (`$TMUX_SESSION_NAME`), the folder you are in, or its git repository (also from a worktree). So inside `~/code/sprint-1` plain `kb cards` is enough.
 
 ## Built-in help
 
@@ -62,6 +62,7 @@ Links work the way Obsidian reads them. `[[Meeting notes]]`, `[[meeting notes]]`
 ```bash
 kb daily                               # open (or start) today's daily note
 kb daily --date 2026-10-01             # another day's
+kb daily --json                        # the note's JSON, without opening an editor
 kb open "meeting notes"                # open a note by title, alias, file name or slug
 kb note rename "meeting notes" "Q4 kickoff"   # rename the file and rewrite links to it
 kb note backlinks "q4 kickoff"         # notes and cards that link to it
@@ -95,7 +96,8 @@ workspace: backend
 ```
 
 - Columns are headings; a number in parentheses is the column's WIP limit.
-- Labels are `#tags`. A label with spaces becomes dashes: "needs review" is `#needs-review`.
+- Labels are `#tags`. Spaces, and characters a tag cannot hold (`#`, `&`, `+`, `.` and other punctuation), become dashes: "needs review" is `#needs-review`, "q&a" is `#q-a`. kb reads tags as the Kanban plugin does: `#c++` is the tag `c`, and a `#word` in a code span is code, not a tag.
+- A card's id is its block id, the `^id` the plugin reads: the last `^word` ending a line of the card. A `^` that would be read that way in text kb writes is escaped (`mc\^2`). A card with no `^id` gets one kb derives from its column and title, written into the file once kb changes the board when another card shares that title.
 - Priority is a `#priority/high` tag. Medium is the default and is not written.
 - The text after `^` is the card's id. It is unique within its board, and kb finds a card by it, or by its first 4 or more characters, on any board.
 - An external id (Jira, GitHub, Linear) is a `[ext:: …]` field.
@@ -121,6 +123,7 @@ kb columns
 kb column add QA
 kb column rename QA Testing
 kb column reorder "Backlog,Todo,In Progress,Testing,Review,Done"   # every column, once
+kb column reorder Backlog Todo "In Progress, QA" Done              # names with commas: one per argument
 kb column wip-limit "In Progress" 2    # 0 clears it
 kb column delete Testing               # its cards are archived (asks first)
 ```
@@ -152,7 +155,7 @@ kb graph -w backend                    # one workspace, plus what it links to el
 kb graph --json                        # nodes (notes, boards, cards) and edges
 ```
 
-The HTML graph loads D3.js from a CDN, so it needs an internet connection.
+The HTML graph has D3.js in the page, so it opens offline and fetches nothing; `--open` writes it to `~/.cache/kb/graph.html`. Links between two items, however many and whichever way, are one line in the graph.
 
 ## Publish to Jekyll
 
@@ -168,7 +171,14 @@ kb publish delete blog                 # forget the site (its posts stay)
 kb publish -- list                     # a note named like a subcommand goes after --
 ```
 
-A post is dated by the day its note was written (`created:`, on your local calendar), and publishing a note again updates the same post. Where each note was published is kept in its frontmatter (`published:`). Links to other notes become links to their posts when those are out (the site's `--permalink` pattern, default `/blog/:year/:month/:day/:title/`), and plain text otherwise. Sites are kept in `~/.config/kb/publish.yml`, since their paths are paths on this machine.
+A post is dated by the day its note was written (`created:`, on your local calendar), and publishing a note again updates the same post. Where each note was published is kept in its frontmatter (`published:`), written before the post, so a publish that fails part way is mended by publishing again. Sites are kept in `~/.config/kb/publish.yml`, since their paths are paths on this machine. With several sites and no `--target`, a note goes to the one site set up for its workspace (`setup -w`).
+
+- Links to other notes become links to their posts when those are out, and plain text otherwise. A link to a heading goes to the heading on the post, and with no display text reads "Note > Heading". Links start with the site's `baseurl` from its `_config.yml`.
+- The permalink pattern (`--permalink`, default `/blog/:year/:month/:day/:title/`) can use `:year`, `:month`, `:day` and `:title`; kb refuses anything else (Jekyll's named styles such as `pretty`, or `:categories`).
+- An embedded note (`![[Note]]`) reads like a link to it, an embedded file by its name.
+- A note holding `{{ }}` or `{% %}` is wrapped in `{% raw %}`, so Jekyll shows it as written instead of running it.
+- Tags YAML would read as something else (`true`, `null`, `2024`, `yes`) are quoted.
+- A note in iCloud that is not downloaded is not published: kb has only its name.
 
 ## TUI
 
@@ -210,9 +220,14 @@ Run `kb` to open the TUI. It opens the current board (see Quick start) when ther
 | `/` | Filter by text or label |
 | `1`-`4` | Show only urgent, high, medium or low |
 | `Esc` | Clear the filters |
+| `r` | Read the board again from its file |
 | `b` | Back to the workspace |
 | `?` | Help |
 | `q` | Quit |
+
+The board follows its file: when an editor, the Kanban plugin or another kb changed it, the next key shows the change (or, once a filter is typed or a move or question is done, the key after). A board whose file is moved or deleted says so and goes back to the workspace.
+
+In the card editor, a field you leave alone is saved exactly as the file had it. If a card changed on disk while you edited it, saving stops and says so: the fields you typed in keep your text, the others now show the change made elsewhere. Save again to keep that, or `Esc` to drop your edits; `Esc` on a form you typed in asks first. A card gone from the file meanwhile can be saved as a new card. A full column asks before taking one more card.
 
 ### Card viewer
 
@@ -258,7 +273,11 @@ The JSON fields:
 - **board**: `id` (its vault path), `name`, `description`, `workspace`
 - **card**: `id`, `board`, `column`, `title`, `description`, `priority`, `labels` (a list), `external_id`, `archived`
 - **column**: `name`, `position`, `wip_limit`, `cards`
-- **workspace**: `id`, `name`, `kind`, `description`, `path`, `position`
+- **workspace**: `id`, `name`, `kind`, `description`, `path`, `position`; `kb workspace show --json` adds `boards` (names) and `notes` (slugs)
+- `kb note delete --json` adds `trashed`, where the file went; `kb daily --json` prints the note instead of opening it. `kb import` prints text only.
+- Times are RFC 3339 in this machine's time zone.
+- **publish**: `note`, `target`, `file_path` (in the site), `full_path` (on this machine), `draft`; `--dry-run --json` adds `content`
+- **graph**: `nodes` (`id`, `label`, `type`, `slug`, `workspace_id`, `connections`, `outside`) and `edges` (`source`, `target`, `context`); a card's node id is `<board path>#<card id>`
 
 Commands that delete ask on stderr and read the answer from stdin. With no answer (a script) they stop with an error, so a script passes `--force` (`-f`). Errors exit with status 1.
 
@@ -271,13 +290,13 @@ kb import --dry-run      # what it will do, writing nothing
 kb import
 ```
 
-Each board becomes a file in `Boards/`, keeping the start of each card's id; archived cards go to the board's Archive, and deleted ones are dropped. Workspaces go to `.kb/workspaces.yml`, publish sites to `~/.config/kb/publish.yml` and publish history into the notes' frontmatter. Labels with spaces become tags with dashes, and the report lists each one. Everything is checked before anything is written, and running it again skips what is done. Afterwards `kb.db` is renamed `kb.db.imported-0.4` and kept. Until the import, kb asks you to run it.
+Each board becomes a file in `Boards/`, keeping the start of each card's id; archived cards go to the board's Archive, and deleted ones are dropped. Workspaces go to `.kb/workspaces.yml`, publish sites to `~/.config/kb/publish.yml` and publish history into the notes' frontmatter. Labels with spaces become tags with dashes, and the report lists each one. Everything is checked before anything is written, and running it again skips what is done. Afterwards `kb.db` is renamed `kb.db.imported-0.4` and kept. Until the import, kb asks you to run it. A `kb.db` that is empty or not a database (with no `kb.db-wal` beside it) holds nothing to import and does not stop kb; an SQLite file that is not kb 0.3's says so, and how to move it aside.
 
 The JSON output changed: card `labels` and note `tags` are lists, boards and cards are named by name rather than by uuid, and cards have no timestamps.
 
 ## Tmux
 
-With [dev-session-manager](https://github.com/jeryldev/dev-session-manager), `prefix + k` opens kb in a tmux popup, in the window's folder, so it opens that project's board: the board named after the folder or its git repository, worktrees included. If kb cannot start, the popup stays open until you press Enter, so you can read why.
+With [dev-session-manager](https://github.com/jeryldev/dev-session-manager), `prefix + k` opens kb in a tmux popup, in the window's folder, so it opens that project's board: the first board that exists named after the dev session (`$TMUX_SESSION_NAME` without its `dev-`), the folder, or its git repository, worktrees included. If kb cannot start, the popup stays open until you press Enter, so you can read why.
 
 ## Files
 
@@ -291,12 +310,11 @@ With [dev-session-manager](https://github.com/jeryldev/dev-session-manager), `pr
 | Publish sites, workspace folders | `~/.config/kb` (`$XDG_CONFIG_HOME`) |
 | Locks that keep two kb processes from clobbering a file | `~/.cache/kb/locks` (`$XDG_CACHE_HOME`) |
 
-kb writes each file atomically, under a lock, and an edit to a note or card that changed on disk since kb read it is refused rather than overwrite the other change. A note in iCloud that is not downloaded shows by name, with a warning, and is never overwritten.
+kb writes each file atomically, under a lock, and an edit to a note or card that changed on disk since kb read it is refused rather than overwrite the other change. The lock is the same however the vault is named (a symlink, or another letter case on macOS). A settings file kb cannot read (`workspaces.yml`, `publish.yml`) is reported as a warning and never written over until you fix it; changing a workspace edits only its entry in `workspaces.yml`, keeping comments and keys kb does not know. A note's frontmatter that kb did not change is written back as it was, comments, quoting and line endings included. A note in iCloud that is not downloaded shows by name, with a warning, and is never overwritten.
 
 ## Limitations
 
 - A board open in Obsidian while kb changes it: the Kanban plugin saves the board as it holds it a moment after any change made in Obsidian, so a kb change made in between can be lost. Close the board in Obsidian (or wait for it to reload the file) before changing it from kb.
-- The HTML graph needs an internet connection (D3.js from a CDN).
 - Publishing supports Jekyll only.
 - Archived workspaces still show in lists.
 

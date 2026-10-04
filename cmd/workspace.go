@@ -80,8 +80,26 @@ var workspaceShowCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		var boards []*model.Board
+		for _, b := range db.ListBoards() {
+			if b.WorkspaceID == ws.ID {
+				boards = append(boards, b)
+			}
+		}
+		notes := db.ListNotesByWorkspace(ws.ID)
 		if jsonOutput {
-			return printJSON(toWorkspaceJSON(ws))
+			show := struct {
+				workspaceJSON
+				Boards []string `json:"boards"` // board names
+				Notes  []string `json:"notes"`  // note slugs
+			}{toWorkspaceJSON(ws), []string{}, []string{}}
+			for _, b := range boards {
+				show.Boards = append(show.Boards, b.Name)
+			}
+			for _, n := range notes {
+				show.Notes = append(show.Notes, n.Slug)
+			}
+			return printJSON(show)
 		}
 		out := cmd.OutOrStdout()
 		fmt.Fprintf(out, "Name: %s\n", ws.Name)
@@ -92,19 +110,13 @@ var workspaceShowCmd = &cobra.Command{
 		if ws.Path != "" {
 			fmt.Fprintf(out, "Path: %s\n", ws.Path)
 		}
-		var boards []*model.Board
-		for _, b := range db.ListBoards() {
-			if b.WorkspaceID == ws.ID {
-				boards = append(boards, b)
-			}
-		}
 		if len(boards) > 0 {
 			fmt.Fprintf(out, "\nBoards (%d):\n", len(boards))
 			for _, b := range boards {
 				fmt.Fprintf(out, "  - %s\n", b.Name)
 			}
 		}
-		if notes := db.ListNotesByWorkspace(ws.ID); len(notes) > 0 {
+		if len(notes) > 0 {
 			fmt.Fprintf(out, "\nNotes (%d):\n", len(notes))
 			for _, n := range notes {
 				fmt.Fprintf(out, "  - %s\n", n.Title)

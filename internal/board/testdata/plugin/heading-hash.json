@@ -1,0 +1,50 @@
+{
+  "frontmatter": {
+    "kanban-plugin": "board"
+  },
+  "settings": {
+    "kanban-plugin": "board"
+  },
+  "lanes": [
+    {
+      "title": "C#",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "sharp",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": []
+        }
+      ]
+    },
+    {
+      "title": "Closed",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "closed heading",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": []
+        }
+      ]
+    },
+    {
+      "title": "F#",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "spaced",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": []
+        }
+      ]
+    }
+  ],
+  "archive": []
+}

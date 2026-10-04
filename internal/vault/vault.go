@@ -252,3 +252,41 @@ func (v *Vault) Remove(rel string) error {
 // IsDataless reports whether a file's contents are in iCloud and not on
 // this machine. Tests replace it to act out such files.
 var IsDataless = isDataless
+
+// Rename moves the file at oldRel to newRel, itself: a symlink stays a
+// symlink, and the mode, Finder tags and creation time stay with it. It
+// never replaces another file (ErrExists), but a new name that is the same
+// file on this disk (another letter case on a case-insensitive disk,
+// another Unicode form on APFS) renames it to that spelling.
+func (v *Vault) Rename(oldRel, newRel string) error {
+	from, err := v.Abs(oldRel)
+	if err != nil {
+		return err
+	}
+	to, err := v.Abs(newRel)
+	if err != nil {
+		return err
+	}
+	if fromInfo, err := os.Lstat(from); err == nil {
+		if toInfo, err := os.Lstat(to); err == nil && os.SameFile(fromInfo, toInfo) {
+			return os.Rename(from, to)
+		}
+	}
+	err = renameNoReplace(from, to)
+	if errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("%s: %w", newRel, ErrExists)
+	}
+	if err != nil {
+		return fmt.Errorf("renaming %s to %s: %w", oldRel, newRel, err)
+	}
+	return nil
+}
+
+// checkThenRename renames a file unless to exists; the check and the
+// rename are two steps, for systems with no call that does both.
+func checkThenRename(from, to string) error {
+	if _, err := os.Lstat(to); !errors.Is(err, fs.ErrNotExist) {
+		return &os.LinkError{Op: "rename", Old: from, New: to, Err: fs.ErrExist}
+	}
+	return os.Rename(from, to)
+}

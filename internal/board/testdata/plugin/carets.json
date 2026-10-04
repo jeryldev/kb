@@ -1,0 +1,78 @@
+{
+  "frontmatter": {
+    "kanban-plugin": "board"
+  },
+  "settings": {
+    "kanban-plugin": "board"
+  },
+  "lanes": [
+    {
+      "title": "Todo",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "mid\nsee ^ref\nmore",
+          "checkChar": " ",
+          "blockId": "ref",
+          "tags": []
+        },
+        {
+          "titleRaw": "eq\ne = mc",
+          "checkChar": " ",
+          "blockId": "2",
+          "tags": []
+        },
+        {
+          "titleRaw": "code\nrun `x ^y`",
+          "checkChar": " ",
+          "blockId": "abcd9999",
+          "tags": []
+        },
+        {
+          "titleRaw": "escaped\ne = mc\\^2",
+          "checkChar": " ",
+          "blockId": "abcd0000",
+          "tags": []
+        },
+        {
+          "titleRaw": "fence\n```\na ^b\n```",
+          "checkChar": " ",
+          "blockId": "abcd1111",
+          "tags": []
+        },
+        {
+          "titleRaw": "link\nsee [[a^b]]",
+          "checkChar": " ",
+          "blockId": "abcd2222",
+          "tags": []
+        },
+        {
+          "titleRaw": "underscore id",
+          "checkChar": " ",
+          "blockId": "my_id",
+          "tags": []
+        },
+        {
+          "titleRaw": "e = mc",
+          "checkChar": " ",
+          "blockId": "3",
+          "tags": []
+        },
+        {
+          "titleRaw": "",
+          "checkChar": " ",
+          "blockId": "t2",
+          "tags": []
+        },
+        {
+          "titleRaw": "twice a",
+          "checkChar": " ",
+          "blockId": "b^c",
+          "tags": []
+        }
+      ]
+    }
+  ],
+  "archive": []
+}

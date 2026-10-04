@@ -162,8 +162,10 @@ func TestAStaleCardEditIsRefused(t *testing.T) {
 func TestManyWritersLoseNoCards(t *testing.T) {
 	s := testStore(t)
 	b := testBoard(t, s)
+	// A Store is used by one goroutine, as in kb, so each writer has its
+	// own: forty kb processes adding a card at once.
 	var stores []*Store
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 40; i++ {
 		stores = append(stores, sibling(t, s))
 	}
 	var wg sync.WaitGroup
@@ -172,7 +174,7 @@ func TestManyWritersLoseNoCards(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, err := stores[i%4].AddCard(b.ID, "Backlog", fmt.Sprintf("card %02d", i), CardFields{}, false)
+			_, err := stores[i].AddCard(b.ID, "Backlog", fmt.Sprintf("card %02d", i), CardFields{}, false)
 			errs <- err
 		}(i)
 	}
@@ -303,5 +305,43 @@ func TestFindCardAcrossBoards(t *testing.T) {
 	}
 	if _, err := s.FindCard("", "abc"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("a 3-character prefix: err = %v, want not found", err)
+	}
+}
+
+// A card id prefix too short to use says so, not just "not found".
+func TestAShortCardPrefixSaysHowLongItMustBe(t *testing.T) {
+	s := testStore(t)
+	b := testBoard(t, s)
+	c, err := s.AddCard(b.ID, "Backlog", "card", CardFields{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.FindCard("", c.ID[:3])
+	if err == nil || !strings.Contains(err.Error(), "at least 4") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+// A card with no words of its own (only a tag) can still be edited: its
+// empty title is what it was, not a title being cleared.
+func TestACardWithoutProseCanBeUpdated(t *testing.T) {
+	s := testStore(t)
+	put(t, s, "Boards/B.md", "---\nkanban-plugin: board\n---\n\n## Todo\n\n- [ ] #onlytag ^t1\n")
+	reload(t, s)
+	c, err := s.FindCard("", "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Description = "hello"
+	if err := s.UpdateCard(c); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, s, "Boards/B.md"); !strings.Contains(got, "    hello") {
+		t.Errorf("board:\n%s", got)
+	}
+	c.Title = ""
+	c.Description = "again"
+	if err := s.UpdateCard(c); err != nil {
+		t.Errorf("an unchanged empty title: %v", err)
 	}
 }

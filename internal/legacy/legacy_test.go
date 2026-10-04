@@ -373,3 +373,68 @@ func missing(t *testing.T, what string) {
 	}
 	t.Skip(what)
 }
+
+// Two columns whose names differ only in case would be one lane: kb finds
+// lanes ignoring case, so their cards would be merged.
+func TestColumnsDifferingOnlyInCaseAreAProblem(t *testing.T) {
+	s := testStore(t)
+	rows := realShape + `
+INSERT INTO columns (id, board_id, name, position) VALUES ('c6', 'b1', 'done', 5);
+`
+	_, err := Read(fixture(t, rows), s)
+	if err == nil || !strings.Contains(err.Error(), `"done"`) || !strings.Contains(err.Error(), `"Done"`) {
+		t.Fatalf("err = %v, want a problem naming both columns", err)
+	}
+}
+
+// A label holding characters a tag cannot is written as a tag the plugin
+// reads whole, and the report says so.
+func TestLabelsWithPunctuationBecomeWholeTags(t *testing.T) {
+	s := testStore(t)
+	rows := realShape + `
+UPDATE cards SET labels = 'c#,q&a,[wip]' WHERE id LIKE '5b20d812%';
+`
+	plan, err := Read(fixture(t, rows), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var changes []string
+	for _, c := range plan.Labels {
+		changes = append(changes, c.From+" -> "+c.To)
+	}
+	got := strings.Join(changes, "; ")
+	for _, want := range []string{"c# -> c", "q&a -> q-a", "[wip] -> wip"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("label changes %q lack %q", got, want)
+		}
+	}
+	if err := plan.Apply(s); err != nil {
+		t.Fatal(err)
+	}
+	if b := read(t, s, "Boards/kb.md"); !strings.Contains(b, "Write tests #c #q-a #wip") {
+		t.Errorf("board:\n%s", b)
+	}
+}
+
+// A label with nothing a tag can hold is reported as dropped, and an old
+// Mac line break (a lone CR) in a title splits it like any other.
+func TestOddLabelsAndTitlesImportCleanly(t *testing.T) {
+	s := testStore(t)
+	rows := realShape + `
+UPDATE cards SET labels = '!!!,ok', title = 'old' || char(13) || 'mac' WHERE id LIKE '5b20d812%';
+`
+	plan, err := Read(fixture(t, rows), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report := plan.Report(); !strings.Contains(report, `"!!!" is dropped`) {
+		t.Errorf("report:\n%s", report)
+	}
+	if err := plan.Apply(s); err != nil {
+		t.Fatal(err)
+	}
+	b := read(t, s, "Boards/kb.md")
+	if !strings.Contains(b, "- [ ] old #ok") || !strings.Contains(b, "    mac") {
+		t.Errorf("board:\n%s", b)
+	}
+}

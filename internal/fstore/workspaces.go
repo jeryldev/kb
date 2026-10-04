@@ -58,13 +58,16 @@ func (s *Store) readWorkspacesFile() (workspacesYAML, error) {
 	return w, nil
 }
 
-func (s *Store) loadWorkspaces(cands []*candidate, boards []*boardFile) ([]*model.Workspace, []string, error) {
+func (s *Store) loadWorkspaces(cands []*candidate, boards []*boardFile) ([]*model.Workspace, []string) {
 	var problems []string
 	file, err := s.readWorkspacesFile()
 	if err != nil {
 		problems = append(problems, err.Error())
 	}
-	paths := s.readWorkspacePaths()
+	paths, err := s.readWorkspacePaths()
+	if err != nil {
+		problems = append(problems, err.Error())
+	}
 	var out []*model.Workspace
 	byName := map[string]*model.Workspace{}
 	for _, w := range file.Workspaces {
@@ -82,11 +85,23 @@ func (s *Store) loadWorkspaces(cands []*candidate, boards []*boardFile) ([]*mode
 		out = append(out, ws)
 		byName[strings.ToLower(w.Name)] = ws
 	}
+	// Workspaces the list does not hold come after those it does, except
+	// Default, which comes first.
+	next := 0
+	for _, ws := range out {
+		next = max(next, ws.Position+1)
+	}
 	implicit := func(name string) {
 		if name == "" || byName[strings.ToLower(name)] != nil {
 			return
 		}
-		ws := &model.Workspace{ID: nameID(name), Name: name, Kind: model.KindArea, Position: len(out), Path: paths[nameID(name)]}
+		pos := next
+		if strings.EqualFold(name, model.DefaultWorkspaceName) {
+			pos = -1
+		} else {
+			next++
+		}
+		ws := &model.Workspace{ID: nameID(name), Name: name, Kind: model.KindArea, Position: pos, Path: paths[nameID(name)]}
 		out = append(out, ws)
 		byName[strings.ToLower(name)] = ws
 	}
@@ -98,7 +113,7 @@ func (s *Store) loadWorkspaces(cands []*candidate, boards []*boardFile) ([]*mode
 		implicit(b.b.Front.Workspace())
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Position < out[j].Position })
-	return out, problems, nil
+	return out, problems
 }
 
 func (s *Store) ListWorkspaces() []*model.Workspace { return s.workspaces }
@@ -143,27 +158,184 @@ func (s *Store) workspaceIDForName(name string) string {
 // for Default, so most files carry no workspace key.
 func (s *Store) workspaceNameForFile(id string) string {
 	ws, err := s.GetWorkspace(id)
-	if err != nil || ws.Name == model.DefaultWorkspaceName {
+	if err != nil || strings.EqualFold(ws.Name, model.DefaultWorkspaceName) {
 		return ""
 	}
 	return ws.Name
 }
 
-// writeWorkspaces writes the workspace list to .kb/workspaces.yml.
-func (s *Store) writeWorkspaces(list []*model.Workspace) error {
-	var file workspacesYAML
-	for i, w := range list {
-		file.Workspaces = append(file.Workspaces, workspaceYAML{ID: w.ID, Name: w.Name, Kind: string(w.Kind), Description: w.Description, Position: i})
-	}
-	data, err := yaml.Marshal(file)
-	if err != nil {
-		return err
-	}
-	header := "# kb workspaces. Notes and boards name their workspace in their frontmatter.\n"
+// editWorkspaces changes .kb/workspaces.yml through fn. Under the
+// file's lock it reads the vault again, so fn sees workspaces another kb
+// added since this one read it, and edits the file's own YAML: comments,
+// keys and kinds kb does not know, and entries it skips stay as they are,
+// and a workspace only notes name is not written into the list. A file kb
+// cannot read is never written over.
+func (s *Store) editWorkspaces(fn func(f *workspacesDoc, current []*model.Workspace) error) error {
 	return s.writeLocked(workspacesFile, func() error {
-		_, err := s.vault.Write(workspacesFile, &vault.Doc{Body: header + string(data)})
+		f, err := s.readWorkspacesDoc()
+		if err != nil {
+			return fmt.Errorf("%w; fix it first, kb will not write over it", err)
+		}
+		if err := s.Reload(); err != nil {
+			return err
+		}
+		if err := fn(f, s.workspaces); err != nil {
+			return err
+		}
+		var buf strings.Builder
+		enc := yaml.NewEncoder(&buf)
+		enc.SetIndent(2)
+		if err := enc.Encode(f.root); err != nil {
+			return err
+		}
+		enc.Close()
+		_, err = s.vault.Write(workspacesFile, &vault.Doc{Body: buf.String()})
 		return err
 	})
+}
+
+// workspacesDoc is .kb/workspaces.yml as a YAML tree, edited in place.
+type workspacesDoc struct {
+	root *yaml.Node // the document
+	list *yaml.Node // the workspaces: sequence
+}
+
+func (s *Store) readWorkspacesDoc() (*workspacesDoc, error) {
+	if _, err := s.readWorkspacesFile(); err != nil {
+		return nil, err
+	}
+	abs, err := s.vault.Abs(workspacesFile)
+	if err != nil {
+		return nil, err
+	}
+	var root yaml.Node
+	if data, err := os.ReadFile(abs); err == nil {
+		if err := yaml.Unmarshal(data, &root); err != nil {
+			return nil, fmt.Errorf("%s: %w", workspacesFile, err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	if len(root.Content) == 0 {
+		root = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map",
+			HeadComment: "kb workspaces. Notes and boards name their workspace in their frontmatter."}}}
+	}
+	top := root.Content[0]
+	if top.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("%s is not a key/value mapping", workspacesFile)
+	}
+	if list := mapValue(top, "workspaces"); list != nil && list.Kind == yaml.SequenceNode {
+		return &workspacesDoc{root: &root, list: list}, nil
+	}
+	list := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+	setMapValue(top, "workspaces", list)
+	return &workspacesDoc{root: &root, list: list}, nil
+}
+
+// entry is the list's entry for a workspace: the one with its id, or with
+// no id and its name (whose id kb derives from the name).
+func (f *workspacesDoc) entry(id string) *yaml.Node {
+	for _, e := range f.list.Content {
+		if e.Kind != yaml.MappingNode {
+			continue
+		}
+		eid, name := scalar(mapValue(e, "id")), scalar(mapValue(e, "name"))
+		if eid == id || (eid == "" && name != "" && nameID(name) == id) {
+			return e
+		}
+	}
+	return nil
+}
+
+func (f *workspacesDoc) add(ws *model.Workspace) {
+	pos := 0
+	for _, e := range f.list.Content {
+		var p int
+		if v := mapValue(e, "position"); v != nil && v.Decode(&p) == nil && p >= pos {
+			pos = p + 1
+		}
+	}
+	e := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	setMapValue(e, "id", str(ws.ID))
+	setMapValue(e, "name", str(ws.Name))
+	setMapValue(e, "kind", str(string(ws.Kind)))
+	if ws.Description != "" {
+		setMapValue(e, "description", str(ws.Description))
+	}
+	setMapValue(e, "position", &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: fmt.Sprint(pos)})
+	f.list.Content = append(f.list.Content, e)
+}
+
+// update writes what changed from before to after into the workspace's
+// entry, adding one when the list has none (a workspace only notes named).
+func (f *workspacesDoc) update(before, after *model.Workspace) {
+	e := f.entry(before.ID)
+	if e == nil {
+		f.add(after)
+		return
+	}
+	if before.Name != after.Name {
+		setMapValue(e, "name", str(after.Name))
+	}
+	if before.Kind != after.Kind {
+		setMapValue(e, "kind", str(string(after.Kind)))
+	}
+	if before.Description != after.Description {
+		if after.Description == "" {
+			setMapValue(e, "description", nil)
+		} else {
+			setMapValue(e, "description", str(after.Description))
+		}
+	}
+}
+
+func (f *workspacesDoc) remove(id string) {
+	e := f.entry(id)
+	for i, c := range f.list.Content {
+		if c == e {
+			f.list.Content = append(f.list.Content[:i], f.list.Content[i+1:]...)
+			return
+		}
+	}
+}
+
+func str(v string) *yaml.Node { return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: v} }
+
+func scalar(n *yaml.Node) string {
+	if n == nil || n.Kind != yaml.ScalarNode {
+		return ""
+	}
+	return n.Value
+}
+
+func mapValue(m *yaml.Node, key string) *yaml.Node {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			return m.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// setMapValue sets key in m, keeping the old value's comments; a nil
+// value removes the key.
+func setMapValue(m *yaml.Node, key string, value *yaml.Node) {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value != key {
+			continue
+		}
+		if value == nil {
+			m.Content = append(m.Content[:i], m.Content[i+2:]...)
+			return
+		}
+		old := m.Content[i+1]
+		value.HeadComment, value.LineComment, value.FootComment = old.HeadComment, old.LineComment, old.FootComment
+		m.Content[i+1] = value
+		return
+	}
+	if value != nil {
+		m.Content = append(m.Content, str(key), value)
+	}
 }
 
 // CreateWorkspace adds a workspace to the vault's list.
@@ -171,16 +343,28 @@ func (s *Store) CreateWorkspace(name string, kind model.WorkspaceKind, descripti
 	if err := model.ValidateWorkspaceName(name); err != nil {
 		return nil, err
 	}
-	if _, err := s.GetWorkspaceByName(name); err == nil {
-		return nil, fmt.Errorf("workspace %q already exists", name)
-	}
 	ws := &model.Workspace{ID: uuid.New().String(), Name: name, Kind: kind, Description: description, Path: path, CreatedAt: time.Now()}
-	list := append(append([]*model.Workspace{}, s.workspaces...), ws)
-	if err := s.writeWorkspaces(list); err != nil {
+	// The path file is checked first, so a workspace is not listed with a
+	// path that could not be saved.
+	if _, err := s.readWorkspacePaths(); err != nil && path != "" {
+		return nil, fmt.Errorf("%w; fix it first, kb will not write over it", err)
+	}
+	err := s.editWorkspaces(func(f *workspacesDoc, current []*model.Workspace) error {
+		for _, w := range current {
+			if strings.EqualFold(w.Name, name) {
+				return fmt.Errorf("workspace %q already exists", name)
+			}
+		}
+		f.add(ws)
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
-	if err := s.setWorkspacePath(ws.ID, path); err != nil {
-		return nil, err
+	if path != "" {
+		if err := s.setWorkspacePath(ws.ID, path); err != nil {
+			return nil, err
+		}
 	}
 	if err := s.Reload(); err != nil {
 		return nil, err
@@ -200,31 +384,44 @@ func (s *Store) UpdateWorkspace(ws *model.Workspace) error {
 	if err != nil {
 		return err
 	}
-	renamed := !strings.EqualFold(before.Name, ws.Name) || before.Name != ws.Name
+	renamed := before.Name != ws.Name
 	if renamed {
-		if before.Name == model.DefaultWorkspaceName {
+		if strings.EqualFold(before.Name, model.DefaultWorkspaceName) {
 			return fmt.Errorf("the %s workspace cannot be renamed", model.DefaultWorkspaceName)
 		}
 		if other, err := s.GetWorkspaceByName(ws.Name); err == nil && other.ID != ws.ID {
 			return fmt.Errorf("workspace %q already exists", ws.Name)
 		}
 	}
+	// Both settings files are checked before any note is renamed, so a
+	// file kb cannot write stops the edit before it half-applies.
+	if _, err := s.readWorkspacesFile(); err != nil {
+		return fmt.Errorf("%w; fix it first, kb will not write over it", err)
+	}
+	if renamed {
+		if err := s.noPlaceholders("renaming"); err != nil {
+			return err
+		}
+	}
+	pathChanged := before.Path != ws.Path
+	if _, err := s.readWorkspacePaths(); err != nil && pathChanged {
+		return fmt.Errorf("%w; fix it first, kb will not write over it", err)
+	}
 	var errs []error
 	if renamed {
 		errs = s.renameWorkspaceInFiles(before.Name, ws.Name)
 	}
-	list := append([]*model.Workspace{}, s.workspaces...)
-	for i, w := range list {
-		if w.ID == ws.ID {
-			copyWS := *ws
-			list[i] = &copyWS
+	err = s.editWorkspaces(func(f *workspacesDoc, _ []*model.Workspace) error {
+		f.update(before, ws)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if pathChanged {
+		if err := s.setWorkspacePath(ws.ID, ws.Path); err != nil {
+			return err
 		}
-	}
-	if err := s.writeWorkspaces(list); err != nil {
-		return err
-	}
-	if err := s.setWorkspacePath(ws.ID, ws.Path); err != nil {
-		return err
 	}
 	if err := s.Reload(); err != nil {
 		return err
@@ -233,6 +430,15 @@ func (s *Store) UpdateWorkspace(ws *model.Workspace) error {
 }
 
 func (s *Store) renameWorkspaceInFiles(oldName, newName string) []error {
+	var errs []error
+	s.batch(func() error {
+		errs = s.renameWorkspaceInEachFile(oldName, newName)
+		return nil
+	})
+	return errs
+}
+
+func (s *Store) renameWorkspaceInEachFile(oldName, newName string) []error {
 	var errs []error
 	for _, n := range s.notes {
 		doc := s.docs[n.ID]
@@ -262,13 +468,34 @@ func (s *Store) renameWorkspaceInFiles(oldName, newName string) []error {
 	return errs
 }
 
+// noPlaceholders refuses a workspace change that must see every file
+// while some are iCloud placeholders kb knows only by name: one of them may
+// name the workspace.
+func (s *Store) noPlaceholders(doing string) error {
+	var paths []string
+	for _, n := range s.notes {
+		if s.dataless[n.ID] {
+			paths = append(paths, n.Path)
+		}
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	sort.Strings(paths)
+	verb := "are"
+	if len(paths) == 1 {
+		verb = "is"
+	}
+	return fmt.Errorf("%s a workspace needs every file, and %s %s in iCloud and not downloaded; open them (kb open) first", doing, strings.Join(paths, ", "), verb)
+}
+
 // ArchiveWorkspace changes a workspace's kind to archive.
 func (s *Store) ArchiveWorkspace(id string) error {
 	ws, err := s.GetWorkspace(id)
 	if err != nil {
 		return err
 	}
-	if ws.Name == model.DefaultWorkspaceName {
+	if strings.EqualFold(ws.Name, model.DefaultWorkspaceName) {
 		return fmt.Errorf("the %s workspace cannot be archived", model.DefaultWorkspaceName)
 	}
 	updated := *ws
@@ -283,8 +510,11 @@ func (s *Store) DeleteWorkspace(id string) error {
 	if err != nil {
 		return err
 	}
-	if ws.Name == model.DefaultWorkspaceName {
+	if strings.EqualFold(ws.Name, model.DefaultWorkspaceName) {
 		return fmt.Errorf("the %s workspace cannot be deleted", model.DefaultWorkspaceName)
+	}
+	if err := s.noPlaceholders("deleting"); err != nil {
+		return err
 	}
 	var users []string
 	for _, n := range s.notes {
@@ -305,13 +535,11 @@ func (s *Store) DeleteWorkspace(id string) error {
 	if len(users) > 0 {
 		return fmt.Errorf("workspace %q is still used by %s", ws.Name, strings.Join(users, ", "))
 	}
-	var list []*model.Workspace
-	for _, w := range s.workspaces {
-		if w.ID != id {
-			list = append(list, w)
-		}
-	}
-	if err := s.writeWorkspaces(list); err != nil {
+	err = s.editWorkspaces(func(f *workspacesDoc, _ []*model.Workspace) error {
+		f.remove(id)
+		return nil
+	})
+	if err != nil {
 		return err
 	}
 	return s.Reload()
@@ -323,31 +551,84 @@ func (s *Store) workspacePathsFile() string {
 	return filepath.Join(s.opts.ConfigDir, "workspace-paths.yml")
 }
 
-func (s *Store) readWorkspacePaths() map[string]string {
+func (s *Store) readWorkspacePaths() (map[string]string, error) {
 	paths := map[string]string{}
-	data, err := os.ReadFile(s.workspacePathsFile())
-	if err == nil {
-		yaml.Unmarshal(data, &paths)
-	}
-	return paths
+	err := readConfigFile(s.workspacePathsFile(), &paths)
+	return paths, err
 }
 
 func (s *Store) setWorkspacePath(id, path string) error {
-	paths := s.readWorkspacePaths()
-	if paths[id] == path {
+	return s.editConfigFile(s.workspacePathsFile(), func() (any, bool, error) {
+		paths, err := s.readWorkspacePaths()
+		if err != nil {
+			return nil, false, err
+		}
+		if paths[id] == path {
+			return nil, false, nil
+		}
+		if path == "" {
+			delete(paths, id)
+		} else {
+			paths[id] = path
+		}
+		return paths, true, nil
+	})
+}
+
+// readConfigFile reads a YAML settings file in the config directory into
+// out. A missing file is empty; one that does not parse is an error
+// naming it.
+func readConfigFile(abs string, out any) error {
+	data, err := os.ReadFile(abs)
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	if path == "" {
-		delete(paths, id)
-	} else {
-		paths[id] = path
-	}
-	data, err := yaml.Marshal(paths)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(s.opts.ConfigDir, 0o755); err != nil {
+	if err := yaml.Unmarshal(data, out); err != nil {
+		return fmt.Errorf("%s: %w", abs, err)
+	}
+	return nil
+}
+
+// editConfigFile changes a settings file in the config directory, holding
+// its lock so two kb processes never write it from the same old copy. fn
+// reads the file and returns what to write, or false to leave it; a read
+// error stops the edit, so a file kb cannot parse is never written over.
+// The file is replaced whole, through a temporary file, never half
+// written.
+func (s *Store) editConfigFile(abs string, fn func() (any, bool, error)) error {
+	unlock, err := lockFile(s.opts.LockDir, abs)
+	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.workspacePathsFile(), data, 0o644)
+	defer unlock()
+	value, write, err := fn()
+	if err != nil {
+		return fmt.Errorf("%w; fix it first, kb will not write over it", err)
+	}
+	if !write {
+		return nil
+	}
+	data, err := yaml.Marshal(value)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(abs), filepath.Base(abs)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), abs)
 }

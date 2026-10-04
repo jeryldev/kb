@@ -1,0 +1,54 @@
+{
+  "frontmatter": {
+    "kanban-plugin": "board"
+  },
+  "settings": {
+    "kanban-plugin": "board"
+  },
+  "lanes": [
+    {
+      "title": "Todo",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "two spaces",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": []
+        },
+        {
+          "titleRaw": "three spaces",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": []
+        },
+        {
+          "titleRaw": "tab after marker",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": []
+        },
+        {
+          "titleRaw": "tab only",
+          "checkChar": "x",
+          "blockId": null,
+          "tags": []
+        },
+        {
+          "titleRaw": "plain",
+          "checkChar": " ",
+          "blockId": "abcd1111",
+          "tags": []
+        }
+      ]
+    },
+    {
+      "title": "Done",
+      "maxItems": 0,
+      "complete": false,
+      "items": []
+    }
+  ],
+  "archive": []
+}

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jeryldev/kb/internal/board"
 	"github.com/jeryldev/kb/internal/model"
 	"github.com/jeryldev/kb/internal/vault"
 )
@@ -154,7 +155,7 @@ func noteFileName(title, slug string) string {
 
 // CreateNote creates a note named after its title (or slug, when one is
 // given that differs from the title's).
-func (s *Store) CreateNote(title, slug, body, workspaceID string) (*Note, error) {
+func (s *Store) CreateNote(title, slug, body, workspaceID string, tags ...string) (*Note, error) {
 	if err := model.ValidateNoteTitle(title); err != nil {
 		return nil, err
 	}
@@ -170,14 +171,32 @@ func (s *Store) CreateNote(title, slug, body, workspaceID string) (*Note, error)
 	if n, ok := s.bySlug[want]; ok {
 		return nil, fmt.Errorf("a note named %q already exists (%s)", want, n.Path)
 	}
-	return s.CreateNoteAt(noteFileName(title, slug), title, body, workspaceID)
+	return s.CreateNoteAt(noteFileName(title, slug), title, body, workspaceID, tags...)
 }
 
 // CreateNoteAt creates a note in a new file at rel, a vault path ending in
 // .md, such as "daily/2026-10-02.md".
-func (s *Store) CreateNoteAt(rel, title, body, workspaceID string) (*Note, error) {
+func (s *Store) CreateNoteAt(rel, title, body, workspaceID string, tags ...string) (*Note, error) {
 	if err := model.ValidateNoteTitle(title); err != nil {
 		return nil, err
+	}
+	// kb reads no hidden folder (.trash, .obsidian, .kb), so a note there
+	// would be written and then never found.
+	for _, part := range strings.Split(path.Clean(rel), "/") {
+		if strings.HasPrefix(part, ".") {
+			return nil, fmt.Errorf("note path %q is in a hidden folder, which kb does not read", rel)
+		}
+	}
+	// Nor does it follow a folder that is a symlink.
+	dir := s.vault.Root()
+	for _, part := range strings.Split(path.Dir(path.Clean(rel)), "/") {
+		if part == "." {
+			break
+		}
+		dir = filepath.Join(dir, part)
+		if fi, err := os.Lstat(dir); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
+			return nil, fmt.Errorf("note path %q is in %s, a symlinked folder, which kb does not read", rel, part)
+		}
 	}
 	if !strings.EqualFold(path.Ext(rel), ".md") {
 		return nil, fmt.Errorf("note path %q must end in .md", rel)
@@ -191,6 +210,9 @@ func (s *Store) CreateNoteAt(rel, title, body, workspaceID string) (*Note, error
 	}
 	doc.SetWorkspace(s.workspaceNameForFile(workspaceID))
 	doc.SetCreated(&now)
+	if len(tags) > 0 {
+		doc.SetTags(tags)
+	}
 	err := s.writeLocked(rel, func() error {
 		_, err := s.vault.Create(rel, doc)
 		return err
@@ -204,7 +226,11 @@ func (s *Store) CreateNoteAt(rel, title, body, workspaceID string) (*Note, error
 	if err := s.Reload(); err != nil {
 		return nil, err
 	}
-	return s.byID[id], nil
+	n, ok := s.byID[id]
+	if !ok {
+		return nil, fmt.Errorf("wrote %s, but kb does not read it as a note", rel)
+	}
+	return n, nil
 }
 
 // readForWrite reads a note's file afresh for a change, under the caller's
@@ -220,6 +246,11 @@ func (s *Store) readForWrite(n *Note, rev string) (*vault.Doc, error) {
 	}
 	if rev != "" && revOf(data) != rev {
 		return nil, ErrConflict
+	}
+	// A file kb took for a note while iCloud had only its name may turn
+	// out to be a board once read: note edits do not belong in it.
+	if board.IsBoard(data) {
+		return nil, fmt.Errorf("%s is a board, not a note: %w", n.Path, ErrIsBoard)
 	}
 	doc, err := vault.Parse(data)
 	if err != nil {
@@ -270,7 +301,11 @@ func (s *Store) UpdateNote(note *Note) error {
 	if err != nil {
 		return err
 	}
-	*note = *s.byID[note.ID]
+	saved, ok := s.byID[note.ID]
+	if !ok {
+		return fmt.Errorf("note %q: %w after saving it; was it moved or trashed?", note.ID, ErrNotFound)
+	}
+	*note = *saved
 	return nil
 }
 
@@ -290,10 +325,7 @@ func (s *Store) patchNote(id string, includeArchived bool, fn func(*vault.Doc)) 
 		_, err = s.vault.Write(n.Path, doc)
 		return err
 	})
-	if reloadErr := s.Reload(); reloadErr != nil && err == nil {
-		err = reloadErr
-	}
-	return err
+	return s.reloadAfter(err)
 }
 
 func (s *Store) ArchiveNote(id string) error {
@@ -350,7 +382,21 @@ func (s *Store) moveToTrash(rel string) (string, error) {
 			candidate = path.Join(".trash", dir, fmt.Sprintf("%s %d%s", name, n, path.Ext(base)))
 		}
 		dst := filepath.Join(s.vault.Root(), filepath.FromSlash(candidate))
-		if _, err := os.Lstat(dst); errors.Is(err, fs.ErrNotExist) {
+		// Holding the name's lock, another kb cannot trash a file to it
+		// between the check and the rename, which would replace that file.
+		unlock, err := lockFile(s.opts.LockDir, dst)
+		if err != nil {
+			return "", err
+		}
+		_, statErr := os.Lstat(dst)
+		if statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {
+			// Not a name in use but a trash folder kb cannot use (a file
+			// where a folder should be, no permission): no other name helps.
+			unlock()
+			return "", fmt.Errorf("moving %s to the trash: %w", rel, statErr)
+		}
+		if statErr != nil {
+			defer unlock()
 			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 				return "", err
 			}
@@ -359,6 +405,7 @@ func (s *Store) moveToTrash(rel string) (string, error) {
 			}
 			return candidate, nil
 		}
+		unlock()
 	}
 }
 

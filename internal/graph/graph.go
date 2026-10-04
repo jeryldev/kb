@@ -78,12 +78,23 @@ func Build(src Source, workspaceID string) *GraphData {
 	}
 	g := &GraphData{Nodes: []Node{}, Edges: []Edge{}}
 	connections := map[string]int{}
+	seen := map[[2]string]bool{}
 	for _, l := range src.Links {
 		_, okS := all[l.SourceID]
 		_, okT := all[l.TargetID]
 		if !okS || !okT || (!inScope(l.SourceID) && !inScope(l.TargetID)) {
 			continue
 		}
+		// Links between two items, however many and whichever way, are one
+		// line between them; a link to itself is no line at all.
+		if l.SourceID == l.TargetID {
+			continue
+		}
+		key := [2]string{min(l.SourceID, l.TargetID), max(l.SourceID, l.TargetID)}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		included[l.SourceID], included[l.TargetID] = true, true
 		g.Edges = append(g.Edges, Edge{Source: l.SourceID, Target: l.TargetID, Context: l.Context})
 		connections[l.SourceID]++
@@ -99,7 +110,10 @@ func Build(src Source, workspaceID string) *GraphData {
 		if g.Nodes[i].Type != g.Nodes[j].Type {
 			return g.Nodes[i].Type > g.Nodes[j].Type // notes, then cards, then boards
 		}
-		return g.Nodes[i].Label < g.Nodes[j].Label
+		if g.Nodes[i].Label != g.Nodes[j].Label {
+			return g.Nodes[i].Label < g.Nodes[j].Label
+		}
+		return g.Nodes[i].ID < g.Nodes[j].ID
 	})
 	return g
 }

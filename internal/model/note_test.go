@@ -107,3 +107,26 @@ func TestFileName(t *testing.T) {
 		}
 	}
 }
+
+// Slugs fold accents and keep letters of any script, so a title in any
+// language has a readable slug (and post name).
+func TestSlugsKeepEveryScript(t *testing.T) {
+	for title, want := range map[string]string{
+		"Café crème":    "cafe-creme",
+		"Ünïcödé Ñote":  "unicode-note",
+		"中文 笔记":         "中文-笔记",
+		"Мир":           "мир",
+		"Hello, World!": "hello-world",
+		"--x--":         "x",
+	} {
+		if got := Slugify(title); got != want {
+			t.Errorf("Slugify(%q) = %q, want %q", title, got, want)
+		}
+		if err := ValidateNoteSlug(Slugify(title)); err != nil {
+			t.Errorf("ValidateNoteSlug(%q): %v", Slugify(title), err)
+		}
+	}
+	if err := ValidateNoteSlug("Not Valid"); err == nil {
+		t.Error("a slug with spaces and capitals: want an error")
+	}
+}

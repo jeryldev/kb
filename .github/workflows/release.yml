@@ -9,7 +9,13 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+    permissions:
+      contents: read
+
   release:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,7 +24,9 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: stable
+          # As in the test workflow: the newest patch of go.mod's Go.
+          go-version: "1.25.x"
+          check-latest: true
 
       - uses: goreleaser/goreleaser-action@v6
         with:
@@ -26,4 +34,3 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

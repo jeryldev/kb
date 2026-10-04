@@ -1,9 +1,8 @@
 version: 2
 
-before:
-  hooks:
-    - go mod tidy
-    - go test ./...
+# No before hooks: the release workflow runs the tests (with the plugin
+# harness and sqlite3) before goreleaser, and a go mod tidy here would
+# build from files that differ from the tag.
 
 builds:
   - env:
@@ -20,6 +19,12 @@ builds:
 archives:
   - formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE*
+      - README*
+      # D3 is in the binary (the graph page); its licence goes with it.
+      - src: internal/graph/d3.LICENSE
+        dst: licenses/d3.LICENSE
 
 # The Homebrew formula lives in jeryldev/homebrew-tap and is updated by
 # hand with each release's URL and checksum.

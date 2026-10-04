@@ -209,3 +209,72 @@ func TestCommentsSurviveARewrittenValue(t *testing.T) {
 		}
 	}
 }
+
+// A note whose frontmatter values kb leaves as they were is written back
+// byte for byte: comments, indentation, quoting, line endings and a BOM
+// are the user's, not kb's.
+func TestUnchangedFrontmatterIsWrittenBackAsItWas(t *testing.T) {
+	for name, src := range map[string]string{
+		"bom":         "\ufeff---\ntitle: Foo\n---\nbody\n",
+		"crlf":        "---\r\ntitle: Foo\r\ntags:\r\n  - a\r\n---\r\nbody\r\n",
+		"comments":    "---\ntitle: Foo # trailing\ncssclass: wide\n\n# foot comment\n---\nbody\n",
+		"indent4":     "---\ntitle: Foo\nnested:\n    key: value\n---\nbody\n",
+		"block tags":  "---\ntags:\n  - a\n  - b\n---\nbody\n",
+		"quoted":      "---\ntitle: 'Foo: bar'\naliases: [\"x\"]\n---\nbody\n",
+		"empty tags":  "---\ntags:\n---\nbody\n",
+		"long string": "---\ndescription: " + strings.Repeat("word ", 40) + "\n---\nbody\n",
+	} {
+		d, err := Parse([]byte(src))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		// What UpdateNote does to a note whose fields did not change.
+		d.SetTitle(d.Title())
+		d.SetTags(d.Tags())
+		if got := string(d.Render()); got != src {
+			t.Errorf("%s: an unchanged save rewrote it:\n%q\nwant\n%q", name, got, src)
+		}
+	}
+}
+
+// A changed CRLF note stays CRLF throughout, and keeps its BOM.
+func TestAnEditKeepsLineEndingsAndBOM(t *testing.T) {
+	d, err := Parse([]byte("\ufeff---\r\ntitle: Foo\r\n---\r\nbody\r\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.SetTitle("Bar")
+	got := string(d.Render())
+	if got != "\ufeff---\r\ntitle: Bar\r\n---\r\nbody\r\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+// A foot comment on the frontmatter survives an edit of another key.
+func TestAFootCommentSurvivesAnEdit(t *testing.T) {
+	d, err := Parse([]byte("---\ntitle: Foo\n\n# keep me\n---\nbody\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.SetPinned(true)
+	if got := string(d.Render()); !strings.Contains(got, "# keep me") {
+		t.Errorf("the comment is gone:\n%s", got)
+	}
+}
+
+// Removing the last key from a note whose body starts with a "---" block
+// keeps an empty frontmatter, so the body is not read as frontmatter.
+func TestABodyThatLooksLikeFrontmatterStaysBody(t *testing.T) {
+	d, err := Parse([]byte("---\ntags: [a]\n---\n---\nx: 1\n---\ntext\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.SetTags(nil)
+	again, err := Parse(d.Render())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Has("x") || again.Body != "---\nx: 1\n---\ntext\n" {
+		t.Errorf("rendered %q", d.Render())
+	}
+}

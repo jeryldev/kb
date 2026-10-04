@@ -2,7 +2,8 @@
 // the vault, workspaces are in the vault's .kb/workspaces.yml, and
 // machine-local settings (publish targets) are in the config directory.
 // There is no database: Open reads the vault into memory, and every write
-// changes one file, under a lock, and then reads the vault again.
+// changes one file, under a lock, and then reads the vault again (parsing
+// only files that changed; a batch of writes reads it once at the end).
 package fstore
 
 import (
@@ -16,6 +17,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jeryldev/kb/internal/board"
@@ -30,6 +32,9 @@ var (
 	ErrConflict = errors.New("changed on disk since it was read; reload it and try again")
 	// ErrNotDownloaded means a note is in iCloud and not on this machine,
 	// so kb knows only its name.
+	// ErrIsBoard means a file kb read as a note (it was in iCloud, not
+	// downloaded) is a board.
+	ErrIsBoard       = errors.New("open it as a board")
 	ErrNotDownloaded = errors.New("is in iCloud and not downloaded yet; open it (kb open) to download it, then try again")
 )
 
@@ -80,11 +85,57 @@ type Store struct {
 	problems []string
 
 	workspaces []*model.Workspace
+	reloads    int  // how many times the vault was read, for tests
+	parsed     int  // how many files were parsed, for tests
+	inBatch    bool // writes are under way that read the vault once at the end
+
+	// cache holds each file as last parsed, by path. Reload parses again
+	// only a file whose size or modification time changed, or that kb
+	// wrote itself, so a write costs a walk of the folder, not a read of
+	// every note.
+	cache map[string]*parsedFile
 }
 
-// Open reads the vault at vaultDir.
+type parsedFile struct {
+	mod     time.Time
+	size    int64
+	board   *boardFile
+	doc     *vault.Doc
+	rev     string
+	problem string
+	// links are the wikilinks parsed from the note's body (key "") or
+	// from each card (key: its id), filled in as buildLinks asks.
+	links map[string][]model.ParsedLink
+}
+
+// parsedLinks is ParseWikilinks(text) for the note or card key in the
+// file at rel, parsed once while the file is unchanged.
+func (s *Store) parsedLinks(rel, key, text string) []model.ParsedLink {
+	c := s.cache[rel]
+	if c == nil {
+		return model.ParseWikilinks(text)
+	}
+	if l, ok := c.links[key]; ok {
+		return l
+	}
+	if c.links == nil {
+		c.links = map[string][]model.ParsedLink{}
+	}
+	l := model.ParseWikilinks(text)
+	c.links[key] = l
+	return l
+}
+
+// Open reads the vault at vaultDir. The vault is the folder the path names
+// once symlinks are followed: walking a symlink would find nothing in it,
+// and two names for one folder must take the same locks.
 func Open(vaultDir string, opts Options) (*Store, error) {
-	s := &Store{vault: vault.New(vaultDir), opts: opts}
+	root, err := filepath.Abs(vaultDir)
+	if err != nil {
+		return nil, err
+	}
+	root = ResolvePath(root)
+	s := &Store{vault: vault.New(root), opts: opts}
 	if err := s.Reload(); err != nil {
 		return nil, err
 	}
@@ -106,36 +157,58 @@ type candidate struct {
 
 // Reload reads the whole vault again.
 func (s *Store) Reload() error {
+	s.reloads++
 	var cands []*candidate
 	var boards []*boardFile
 	var problems []string
+	cache := map[string]*parsedFile{}
 	err := s.vault.WalkSkipping(func(e vault.Entry) error {
+		if c, ok := s.cache[e.Path]; ok && !e.Dataless && c.mod.Equal(e.ModTime) && c.size == e.Size {
+			cache[e.Path] = c
+			switch {
+			case c.board != nil:
+				boards = append(boards, c.board)
+			case c.doc != nil:
+				cands = append(cands, &candidate{entry: e, doc: c.doc, rev: c.rev})
+			}
+			if c.problem != "" {
+				problems = append(problems, c.problem)
+			}
+			return nil
+		}
 		if e.Dataless {
 			problems = append(problems, fmt.Sprintf("%s is in iCloud and not downloaded; kb shows its name only", e.Path))
 			cands = append(cands, &candidate{entry: e, doc: &vault.Doc{}, dataless: true})
 			return nil
 		}
 		abs, _ := s.vault.Abs(e.Path)
+		s.parsed++
 		data, err := os.ReadFile(abs)
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("%s: %v", e.Path, err))
 			return nil
 		}
+		parsed := &parsedFile{mod: e.ModTime, size: e.Size}
+		cache[e.Path] = parsed
 		if board.IsBoard(data) {
 			bf, err := loadBoard(e.Path, data)
 			if err != nil {
-				problems = append(problems, fmt.Sprintf("%s: %v", e.Path, err))
+				parsed.problem = fmt.Sprintf("%s: %v", e.Path, err)
+				problems = append(problems, parsed.problem)
 				return nil
 			}
+			parsed.board = bf
 			boards = append(boards, bf)
 			return nil
 		}
 		doc, err := vault.Parse(data)
 		if err != nil {
-			problems = append(problems, fmt.Sprintf("%s: %v (read as plain text)", e.Path, err))
+			parsed.problem = fmt.Sprintf("%s: %v (read as plain text)", e.Path, err)
+			problems = append(problems, parsed.problem)
 			doc = &vault.Doc{Body: string(data)}
 		}
-		cands = append(cands, &candidate{entry: e, doc: doc, rev: revOf(data)})
+		parsed.doc, parsed.rev = doc, revOf(data)
+		cands = append(cands, &candidate{entry: e, doc: doc, rev: parsed.rev})
 		return nil
 	}, func(rel string, err error) {
 		problems = append(problems, fmt.Sprintf("skipped %s: %v", rel, err))
@@ -144,12 +217,13 @@ func (s *Store) Reload() error {
 		return fmt.Errorf("reading the vault %s: %w", s.vault.Root(), err)
 	}
 
-	workspaces, wsProblems, err := s.loadWorkspaces(cands, boards)
-	if err != nil {
-		return err
-	}
+	workspaces, wsProblems := s.loadWorkspaces(cands, boards)
 	problems = append(problems, wsProblems...)
+	if _, err := s.readTargets(); err != nil {
+		problems = append(problems, err.Error())
+	}
 
+	s.cache = cache
 	s.problems = problems
 	s.workspaces = workspaces
 	s.boards = boards
@@ -216,14 +290,29 @@ func (s *Store) buildNotes(cands []*candidate) {
 		}
 		groups[base] = append(groups[base], c)
 	}
+	// A numbered slug skips any slug a file already has as its plain one
+	// (sub/foo.md is foo-3 when foo-2.md exists), so one slug names one
+	// note. Bases are taken in order so every load numbers them alike.
 	slug := map[*candidate]string{}
-	for base, group := range groups {
+	taken = map[string]bool{}
+	var bases []string
+	for base := range groups {
+		bases = append(bases, base)
+		taken[base] = true
+	}
+	sort.Strings(bases)
+	for _, base := range bases {
+		group := groups[base]
 		sort.Slice(group, func(i, j int) bool { return shorterFirst(group[i].entry.Path, group[j].entry.Path) })
-		for i, c := range group {
-			slug[c] = base
-			if i > 0 {
-				slug[c] = fmt.Sprintf("%s-%d", base, i+1)
+		slug[group[0]] = base
+		n := 2
+		for _, c := range group[1:] {
+			for taken[fmt.Sprintf("%s-%d", base, n)] {
+				n++
 			}
+			slug[c] = fmt.Sprintf("%s-%d", base, n)
+			taken[slug[c]] = true
+			n++
 		}
 	}
 
@@ -288,6 +377,42 @@ func originalFirst(a, b string) bool {
 	return a < b
 }
 
+// ResolvePath follows the symlinks in an absolute path. A path whose end
+// does not exist yet (a vault kb is about to create) has the part that
+// does exist resolved, so it names the same place it will once created.
+func ResolvePath(abs string) string {
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		return real
+	}
+	parent := filepath.Dir(abs)
+	if parent == abs {
+		return abs
+	}
+	return filepath.Join(ResolvePath(parent), filepath.Base(abs))
+}
+
+// reloadAfter reads the vault again after a write, unless the write is
+// one of a batch (see batch). It returns the write's error, else the
+// reload's.
+func (s *Store) reloadAfter(err error) error {
+	if s.inBatch {
+		return err
+	}
+	if reloadErr := s.Reload(); reloadErr != nil && err == nil {
+		return reloadErr
+	}
+	return err
+}
+
+// batch runs writes that each change a file kb has read, such as every
+// note naming a workspace, and reads the vault once when they are done.
+func (s *Store) batch(fn func() error) error {
+	s.inBatch = true
+	err := fn()
+	s.inBatch = false
+	return s.reloadAfter(err)
+}
+
 // writeLocked runs fn holding the lock for one vault file, so that kb
 // processes never interleave a read-modify-write of the same file.
 func (s *Store) writeLocked(rel string, fn func() error) error {
@@ -295,11 +420,18 @@ func (s *Store) writeLocked(rel string, fn func() error) error {
 	if err != nil {
 		return err
 	}
+	// A symlinked note is locked as the file it points to, which another
+	// name for it shares.
+	if fi, err := os.Lstat(abs); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		abs = ResolvePath(abs)
+	}
 	unlock, err := lockFile(s.opts.LockDir, abs)
 	if err != nil {
 		return err
 	}
 	defer unlock()
+	// The next reload parses this file again, whatever its time says.
+	defer delete(s.cache, rel)
 	return fn()
 }
 

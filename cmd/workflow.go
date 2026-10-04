@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -51,7 +53,19 @@ KB_DAILY_DIR (default "daily").`,
 		if dir == "" {
 			dir = "daily"
 		}
+		// An absolute path names a folder in the vault; a relative one is
+		// in the vault already. Either way it must stay inside it.
+		if filepath.IsAbs(dir) {
+			rel, err := filepath.Rel(db.Vault().Root(), fstore.ResolvePath(dir))
+			if err != nil {
+				return err
+			}
+			dir = filepath.ToSlash(rel)
+		}
 		rel := path.Join(dir, date+".md")
+		if rel == ".." || strings.HasPrefix(rel, "../") {
+			return fmt.Errorf("KB_DAILY_DIR %q is outside the vault %s", os.Getenv("KB_DAILY_DIR"), db.Vault().Root())
+		}
 
 		note, err := db.GetNoteByPath(rel)
 		if err != nil {
@@ -61,6 +75,10 @@ KB_DAILY_DIR (default "daily").`,
 			if note, err = db.CreateNoteAt(rel, date, "", db.DefaultWorkspace().ID); err != nil {
 				return err
 			}
+		}
+		// For a script: the note, without opening an editor.
+		if jsonOutput {
+			return printJSON(toNoteJSON(note))
 		}
 		return editNoteFile(note)
 	},

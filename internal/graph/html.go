@@ -1,11 +1,18 @@
 package graph
 
 import (
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"html"
 	"strings"
 )
+
+// d3 is D3 v7.9.0 (ISC licence, d3.LICENSE), put in the page so the graph
+// opens offline and the page fetches nothing while showing your notes.
+//
+//go:embed d3.v7.min.js
+var d3 string
 
 func GenerateHTML(data *GraphData, title string) (string, error) {
 	nodesJSON, err := json.Marshal(data.Nodes)
@@ -40,12 +47,14 @@ func GenerateHTML(data *GraphData, title string) (string, error) {
 </head>
 <body>
 <div id="info">
-  <span id="stat-nodes">0</span> notes &middot;
+  <span id="stat-nodes">0</span> items &middot;
   <span id="stat-edges">0</span> links &middot;
   <span id="stat-orphans">0</span> orphans
 </div>
 <svg id="graph"></svg>
-<script src="https://d3js.org/d3.v7.min.js"></script>
+<script>`)
+	b.WriteString(d3)
+	b.WriteString(`</script>
 <script>
 const nodes = `)
 	b.Write(nodesJSON)

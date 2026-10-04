@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/url"
 	"os"
@@ -74,6 +75,32 @@ type Plan struct {
 	Publications   []publication
 	NoteWorkspaces []noteWorkspace
 	Skipped        []string
+}
+
+// MayHoldData reports whether the kb 0.3 database at path may hold boards
+// to import: it is an SQLite file, or its write-ahead log has changes not
+// yet written into it (kb 0.3 stopped before a checkpoint leaves kb.db
+// empty and everything in kb.db-wal).
+func MayHoldData(path string) bool {
+	return IsSQLite(path) || hasWAL(path)
+}
+
+func hasWAL(path string) bool {
+	info, err := os.Stat(path + "-wal")
+	return err == nil && info.Size() > 0
+}
+
+// IsSQLite reports whether the file at path starts as an SQLite database
+// does. An empty or damaged kb.db holds nothing to import.
+func IsSQLite(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	header := make([]byte, 16)
+	_, err = io.ReadFull(f, header)
+	return err == nil && string(header) == "SQLite format 3\x00"
 }
 
 // query runs SQL against the database, read-only, and decodes the rows.
@@ -150,11 +177,29 @@ type logRow struct {
 // vault, checking everything first: it returns every problem it finds,
 // and writes nothing.
 func Read(dbPath string, s *fstore.Store) (*Plan, error) {
+	// Checked first: with a WAL, an empty kb.db can still hold everything.
+	if hasWAL(dbPath) {
+		return nil, fmt.Errorf("%s-wal has changes not yet in the database; kb 0.3 may be running. Quit it (or open kb 0.3 once and quit) and import again", dbPath)
+	}
+	if !IsSQLite(dbPath) {
+		return nil, fmt.Errorf("%s is not an SQLite database (it is empty or damaged), so it holds nothing to import; kb ignores it. To keep it out of the way: mv %q %q", dbPath, dbPath, dbPath+".not-kb")
+	}
 	if _, err := exec.LookPath("sqlite3"); err != nil {
 		return nil, fmt.Errorf("the import reads kb 0.3's database with the sqlite3 program, which is not installed")
 	}
-	if info, err := os.Stat(dbPath + "-wal"); err == nil && info.Size() > 0 {
-		return nil, fmt.Errorf("%s-wal has changes not yet in the database; kb 0.3 may be running. Quit it (or open kb 0.3 once and quit) and import again", dbPath)
+
+	var tables []struct{ Name string }
+	if err := query(dbPath, "SELECT name AS Name FROM sqlite_master WHERE type = 'table'", &tables); err != nil {
+		return nil, err
+	}
+	have := map[string]bool{}
+	for _, t := range tables {
+		have[t.Name] = true
+	}
+	for _, want := range []string{"workspaces", "boards", "columns", "cards"} {
+		if !have[want] {
+			return nil, fmt.Errorf("%s is not a kb 0.3 database (it has no %s table); move it aside to use kb: mv %q %q", dbPath, want, dbPath, dbPath+".not-kb")
+		}
 	}
 
 	var workspaces []wsRow
@@ -254,10 +299,16 @@ func (p *Plan) buildBoard(b boardRow, workspace string, cols []columnRow, cardsO
 	bp := BoardPlan{OldID: b.ID, Name: b.Name}
 	var problems []string
 	var lanes []string
+	seen := map[string]string{}
 	for _, c := range cols {
 		if err := board.ValidateLaneName(c.Name); err != nil {
 			problems = append(problems, fmt.Sprintf("board %q, column %q: %v; rename it in kb 0.3 first", b.Name, c.Name, err))
 		}
+		// kb finds lanes ignoring case, so the second would get the first's cards.
+		if other, ok := seen[strings.ToLower(c.Name)]; ok {
+			problems = append(problems, fmt.Sprintf("board %q: columns %q and %q differ only in case; rename one in kb 0.3 first", b.Name, other, c.Name))
+		}
+		seen[strings.ToLower(c.Name)] = c.Name
 		lanes = append(lanes, c.Name)
 	}
 	doc := board.New(lanes)
@@ -285,7 +336,9 @@ func (p *Plan) buildBoard(b boardRow, workspace string, cols []columnRow, cardsO
 			}
 			// Trailing blank lines would be stray indented lines in the file.
 			title, desc := card.Title, strings.TrimRight(card.Description, " \t\r\n")
-			if first, rest, ok := strings.Cut(strings.ReplaceAll(title, "\r\n", "\n"), "\n"); ok {
+			// Any line break counts, an old Mac's lone CR too.
+			breaks := strings.NewReplacer("\r\n", "\n", "\r", "\n")
+			if first, rest, ok := strings.Cut(breaks.Replace(title), "\n"); ok {
 				title = strings.TrimSpace(first)
 				desc = strings.TrimSpace(strings.TrimSpace(rest) + "\n\n" + desc)
 				p.Titles = append(p.Titles, title)
@@ -523,7 +576,11 @@ func (p *Plan) Report() string {
 		line("Labels become #tags, which cannot hold spaces:")
 		sort.SliceStable(p.Labels, func(i, j int) bool { return p.Labels[i].Card < p.Labels[j].Card })
 		for _, l := range p.Labels {
-			line("  %q becomes #%s (card %q)", l.From, l.To, l.Card)
+			if l.To == "" {
+				line("  %q is dropped: it has nothing a tag can hold (card %q)", l.From, l.Card)
+			} else {
+				line("  %q becomes #%s (card %q)", l.From, l.To, l.Card)
+			}
 		}
 	}
 	if len(p.Titles) > 0 {

@@ -6,8 +6,10 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jeryldev/kb/internal/model"
+	"gopkg.in/yaml.v3"
 )
 
 // NoteResolver finds the note a wikilink names, by any name it could use.
@@ -22,8 +24,26 @@ func JekyllFileName(slug string, date time.Time) string {
 // DefaultPermalink is the permalink pattern of a target that sets none.
 const DefaultPermalink = "/blog/:year/:month/:day/:title/"
 
-func JekyllPermalink(slug string, date time.Time) string {
-	return ExpandPermalink(DefaultPermalink, slug, date)
+var permalinkToken = regexp.MustCompile(`:[a-z_]+`)
+
+// ValidatePermalink refuses a pattern kb cannot fill in: kb expands only
+// :year, :month, :day and :title, so a Jekyll style name ("pretty") or
+// another placeholder (:categories) would give links that go nowhere.
+func ValidatePermalink(pattern string) error {
+	if pattern == "" {
+		return nil
+	}
+	if !strings.HasPrefix(pattern, "/") {
+		return fmt.Errorf("permalink %q must start with / (kb does not know Jekyll's named styles; spell the pattern out, such as /:year/:month/:day/:title/)", pattern)
+	}
+	for _, tok := range permalinkToken.FindAllString(pattern, -1) {
+		switch tok {
+		case ":year", ":month", ":day", ":title":
+		default:
+			return fmt.Errorf("permalink %q uses %s; kb fills in only :year, :month, :day and :title", pattern, tok)
+		}
+	}
+	return nil
 }
 
 // ExpandPermalink fills in a Jekyll permalink pattern's :year, :month,
@@ -50,7 +70,7 @@ func GenerateFrontMatter(note *model.Note, date time.Time, draft bool) string {
 	if note.Tags != "" {
 		var tags []string
 		for _, t := range note.TagList() {
-			if plainTag.MatchString(t) {
+			if plainTag.MatchString(t) && readsAsText(t) {
 				tags = append(tags, t)
 			} else {
 				tags = append(tags, yamlQuote(t))
@@ -78,6 +98,13 @@ func GenerateFrontMatter(note *model.Note, date time.Time, draft bool) string {
 func GeneratePost(note *model.Note, date time.Time, draft bool, permalinks map[string]string, resolver NoteResolver) string {
 	frontMatter := GenerateFrontMatter(note, date, draft)
 	body := ResolveWikilinks(note.Body, permalinks, resolver)
+	// Jekyll runs Liquid over a post, so a note holding {{ }} or {% %} (a
+	// template, a code sample) would break the site's build or lose text.
+	// raw keeps it text on every Jekyll; a note that itself closes a raw
+	// block is left as written.
+	if (strings.Contains(body, "{{") || strings.Contains(body, "{%")) && !strings.Contains(body, "endraw") {
+		body = "{% raw %}" + body + "{% endraw %}"
+	}
 	return frontMatter + "\n" + body + "\n"
 }
 
@@ -85,9 +112,15 @@ func GeneratePost(note *model.Note, date time.Time, draft bool, permalinks map[s
 // published note becomes a link to its post, and anything else becomes
 // plain text (the display text, the note's title, or the link as written).
 func ResolveWikilinks(body string, permalinks map[string]string, resolver NoteResolver) string {
-	return model.ReplaceWikilinks(body, func(target, display string, hasDisplay bool) string {
-		target = strings.TrimSpace(target)
-		display = strings.TrimSpace(display)
+	return model.ReplaceLinks(body, func(l model.Wikilink) string {
+		target := strings.TrimSpace(l.Target)
+		display := strings.TrimSpace(l.Display)
+		hasDisplay := l.HasDisplay
+		if l.File {
+			// An embedded file (an image, a PDF) is not on the site: its name.
+			name, _, _ := strings.Cut(target, "#")
+			return filepath.Base(strings.TrimSpace(name))
+		}
 
 		if strings.HasPrefix(target, "card:") || strings.HasPrefix(target, "board:") {
 			if hasDisplay && display != "" {
@@ -100,26 +133,36 @@ func ResolveWikilinks(body string, permalinks map[string]string, resolver NoteRe
 		if resolver != nil {
 			note, _ = resolver.ResolveNoteRef(target)
 		}
-		text := display
-		if text == "" && note != nil {
-			text = note.Title
+		name, heading, _ := strings.Cut(target, "#")
+		name, heading = strings.TrimSpace(name), strings.TrimSpace(heading)
+		if name == "" {
+			// [[#Heading]] is a place in the same note.
+			if hasDisplay && display != "" {
+				return display
+			}
+			return heading
 		}
-		if text == "" {
-			text = target
+		text := display
+		if text == "" || !hasDisplay {
+			text = name
+			if note != nil {
+				text = note.Title
+			}
+			// Obsidian shows a link to a heading as "Note > Heading".
+			if heading != "" {
+				text += " > " + heading
+			}
 		}
 		if note != nil {
 			if permalink, ok := permalinks[note.ID]; ok {
+				if heading != "" {
+					permalink += "#" + headingAnchor(heading)
+				}
 				return fmt.Sprintf("[%s](%s)", text, permalink)
 			}
 		}
 		return text
 	})
-}
-
-// PermalinkFromPostPath is the URL of the post written at path, with the
-// default permalink pattern.
-func PermalinkFromPostPath(path string) (string, bool) {
-	return PermalinkFor("", path)
 }
 
 // PermalinkFor is the URL of the post written at path, read from its
@@ -155,18 +198,37 @@ func PostFilePath(postsDir, slug string, date time.Time) string {
 }
 
 func extractExcerpt(body string) string {
-	body = strings.TrimSpace(body)
-	if body == "" {
-		return ""
-	}
-
-	lines := strings.SplitN(body, "\n", 10)
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
+	fence, comment := "", ""
+	for _, raw := range strings.Split(body, "\n") {
+		line := strings.TrimSpace(raw)
+		switch {
+		case fence != "":
+			if model.ClosesFence(raw, fence) {
+				fence = ""
+			}
+			continue
+		case comment != "":
+			// Inside an Obsidian %% comment %% or an HTML <!-- comment -->.
+			if strings.Contains(line, comment) {
+				comment = ""
+			}
+			continue
+		case model.OpeningFence(raw) != "":
+			fence = model.OpeningFence(raw)
+			continue
+		case strings.HasPrefix(line, "%%"):
+			if !strings.Contains(line[2:], "%%") {
+				comment = "%%"
+			}
+			continue
+		case strings.HasPrefix(line, "<!--"):
+			if !strings.Contains(line, "-->") {
+				comment = "-->"
+			}
 			continue
 		}
-		if strings.HasPrefix(line, "#") || strings.HasPrefix(line, "```") || strings.HasPrefix(line, "---") {
+		indented := strings.HasPrefix(raw, "    ") || strings.HasPrefix(raw, "\t")
+		if line == "" || indented || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "---") || strings.HasPrefix(line, "|") {
 			continue
 		}
 		if runes := []rune(line); len(runes) > 200 {
@@ -177,8 +239,25 @@ func extractExcerpt(body string) string {
 	return ""
 }
 
-// plainTag is a tag YAML reads as itself without quotes in a flow list.
+// plainTag is a tag that needs no quotes in a flow list, unless YAML
+// would read it as another value (see readsAsText).
 var plainTag = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N}_/.-]*$`)
+
+// readsAsText reports whether YAML reads s unquoted as the text s, not a
+// number, date, null or boolean. Jekyll parses with Ruby's YAML 1.1, where
+// yes, no, on and off are booleans too.
+func readsAsText(s string) bool {
+	switch strings.ToLower(s) {
+	case "y", "n", "yes", "no", "on", "off", "true", "false":
+		return false
+	}
+	var v any
+	if err := yaml.Unmarshal([]byte(s), &v); err != nil {
+		return false
+	}
+	str, ok := v.(string)
+	return ok && str == s
+}
 
 // yamlQuote writes s as a YAML double-quoted scalar. Go's %q is close but
 // not the same: YAML has no \x00-style escapes past \xFF and reads \a
@@ -207,5 +286,21 @@ func yamlQuote(s string) string {
 		}
 	}
 	b.WriteByte('"')
+	return b.String()
+}
+
+// headingAnchor is the id kramdown, Jekyll's Markdown converter, gives a
+// heading: lowercase, with characters other than letters, digits, spaces
+// and dashes dropped, and spaces made dashes.
+func headingAnchor(heading string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(heading) {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-':
+			b.WriteRune(r)
+		case r == ' ':
+			b.WriteByte('-')
+		}
+	}
 	return b.String()
 }

@@ -550,8 +550,8 @@ func executeCmdErr(t *testing.T, args ...string) (string, error) {
 func TestFormatTime(t *testing.T) {
 	ts := time.Date(2026, 2, 23, 14, 30, 0, 0, time.UTC)
 	got := formatTime(ts)
-	if got != "2026-02-23T14:30:00Z" {
-		t.Errorf("formatTime() = %q, want RFC3339 format", got)
+	if want := ts.Local().Format(time.RFC3339); got != want {
+		t.Errorf("formatTime() = %q, want %q (RFC 3339, local time)", got, want)
 	}
 }
 
@@ -2616,7 +2616,7 @@ func TestPublishDatesPostsByCreationAndLinksEarlierPosts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "Read [part two](/blog/2026/05/13/dual-transformation/) first.") {
+	if !strings.Contains(string(data), "Read [part two](/blog/2026/05/13/dual-transformation/#part-2) first.") {
 		t.Errorf("post:\n%s", data)
 	}
 	if !strings.Contains(string(data), "date: 2026-06-02") {

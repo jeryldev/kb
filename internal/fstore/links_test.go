@@ -108,3 +108,33 @@ func TestRenameMovesTheFileAndRewritesLinksToIt(t *testing.T) {
 		t.Errorf("a case-only rename: %+v, %v", r, err)
 	}
 }
+
+// A card's source id is "<board path>#<card id>", and a board's file name
+// can hold a #: the id splits at the last one.
+func TestABoardNamedWithAHashKeepsItsLinks(t *testing.T) {
+	s := testStore(t)
+	put(t, s, "Target.md", "body")
+	put(t, s, "Boards/C# work.md", "---\nkanban-plugin: board\n---\n\n## Todo\n\n- [ ] see [[Target]] ^abcd1234\n")
+	put(t, s, "Boards/Plain.md", "---\nkanban-plugin: board\n---\n\n## Todo\n\n- [ ] see [[Target]] ^abcd5678\n")
+	reload(t, s)
+	n, err := s.ResolveNote("Target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var boards []string
+	for _, b := range s.Backlinks(n.ID) {
+		boards = append(boards, b.Board)
+	}
+	sort.Strings(boards)
+	if strings.Join(boards, ",") != "C# work,Plain" {
+		t.Fatalf("backlinks from boards %v, want C# work and Plain", boards)
+	}
+	if _, _, err := s.RenameNote(n.ID, "Renamed"); err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range []string{"Boards/C# work.md", "Boards/Plain.md"} {
+		if got := read(t, s, b); !strings.Contains(got, "[[Renamed]]") {
+			t.Errorf("%s after the rename:\n%s", b, got)
+		}
+	}
+}

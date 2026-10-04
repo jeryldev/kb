@@ -73,15 +73,10 @@ var noteCreateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		note, err := db.CreateNote(args[0], slug, body, workspaceID)
+		tags, _ := cmd.Flags().GetString("tags")
+		note, err := db.CreateNote(args[0], slug, body, workspaceID, (&model.Note{Tags: tags}).TagList()...)
 		if err != nil {
 			return err
-		}
-		if cmd.Flags().Changed("tags") {
-			note.Tags, _ = cmd.Flags().GetString("tags")
-			if err := db.UpdateNote(note); err != nil {
-				return err
-			}
 		}
 		if jsonOutput {
 			return printJSON(toNoteJSON(note))
@@ -99,6 +94,9 @@ var noteShowCmd = &cobra.Command{
 		note, err := resolveNote(args[0])
 		if err != nil {
 			return err
+		}
+		if db.NotDownloaded(note.ID) {
+			fmt.Fprintf(cmd.ErrOrStderr(), "kb: %s is in iCloud and not downloaded; its text is not on this machine yet (kb open downloads it)\n", note.Path)
 		}
 		if jsonOutput {
 			return printJSON(toNoteJSON(note))
@@ -199,7 +197,10 @@ var noteDeleteCmd = &cobra.Command{
 			return err
 		}
 		if jsonOutput {
-			return printJSON(toNoteJSON(note))
+			return printJSON(struct {
+				noteJSON
+				Trashed string `json:"trashed"` // where the file is now
+			}{toNoteJSON(note), dest})
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Moved note %q to %s\n", note.Title, dest)
 		return nil

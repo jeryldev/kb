@@ -37,11 +37,9 @@ func ParseWikilinks(text string) []ParsedLink {
 	for _, match := range matches {
 		inner := text[match[2]:match[3]]
 
-		ref := inner
-		display := inner
-		if idx := strings.Index(inner, "|"); idx != -1 {
-			ref = inner[:idx]
-			display = inner[idx+1:]
+		ref, _, display, hasDisplay := splitLink(inner)
+		if !hasDisplay {
+			display = inner
 		}
 
 		targetType := "note"
@@ -77,72 +75,153 @@ func ParseWikilinks(text string) []ParsedLink {
 	return links
 }
 
-var markdownLinkRe = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
-
-func ExtractMarkdownLinks(text string) []ParsedLink {
-	matches := markdownLinkRe.FindAllStringSubmatch(text, -1)
-	if matches == nil {
-		return nil
+// splitLink splits a wikilink's inside at its first pipe into target and
+// display text. In a table the pipe is written \| so the table keeps its
+// columns; sep is the pipe as written, to write it back the same way.
+func splitLink(inner string) (target, sep, display string, hasDisplay bool) {
+	i := strings.Index(inner, "|")
+	if i < 0 {
+		return inner, "", "", false
 	}
-
-	var links []ParsedLink
-	for _, match := range matches {
-		links = append(links, ParsedLink{
-			TargetType: "url",
-			TargetRef:  match[2],
-			Display:    match[1],
-		})
+	if i > 0 && inner[i-1] == '\\' {
+		return inner[:i-1], `\|`, inner[i+1:], true
 	}
-
-	return links
+	return inner[:i], "|", inner[i+1:], true
 }
 
-// ReplaceWikilinks replaces each [[target]] or [[target|display]] in text
-// with what replace returns for it. Links never span lines, and links in
-// code or image embeds are left alone (see linkMatches).
-func ReplaceWikilinks(text string, replace func(target, display string, hasDisplay bool) string) string {
+// Wikilink is one [[link]] or ![[embed]] in a text.
+type Wikilink struct {
+	Target     string
+	Display    string
+	HasDisplay bool
+	// Embed is ![[...]]; File is an embed of a file other than a note
+	// (![[diagram.png]]).
+	Embed, File bool
+}
+
+// ReplaceLinks replaces each wikilink and embed in text, the "!" of an
+// embed included, with what replace returns for it. Links never span
+// lines, and links in code are left alone.
+func ReplaceLinks(text string, replace func(Wikilink) string) string {
 	var b strings.Builder
 	last := 0
-	for _, m := range linkMatches(text) {
-		target, display, hasDisplay := strings.Cut(text[m[2]:m[3]], "|")
-		b.WriteString(text[last:m[0]])
-		b.WriteString(replace(target, display, hasDisplay))
-		last = m[1]
+	for _, m := range wikilinkMatches(text) {
+		target, _, display, hasDisplay := splitLink(text[m.inner[0]:m.inner[1]])
+		b.WriteString(text[last:m.start])
+		b.WriteString(replace(Wikilink{Target: target, Display: display, HasDisplay: hasDisplay, Embed: m.embed, File: m.file}))
+		last = m.end
 	}
 	b.WriteString(text[last:])
 	return b.String()
 }
 
 var (
-	inlineCodeRe = regexp.MustCompile("`[^`\n]*`")
-	fenceRe      = regexp.MustCompile("^ {0,3}(```|~~~)")
-	fileExtRe    = regexp.MustCompile(`\.([A-Za-z0-9]+)$`)
+	fenceRe   = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})(.*)$")
+	fileExtRe = regexp.MustCompile(`\.([A-Za-z0-9]+)$`)
 )
+
+// OpeningFence is the fence a line opens a code block with, or "". A
+// backtick fence's info string cannot hold a backtick (CommonMark 4.5).
+func OpeningFence(line string) string {
+	m := fenceRe.FindStringSubmatch(strings.TrimRight(line, "\r\n"))
+	if m == nil || (m[1][0] == '`' && strings.Contains(m[2], "`")) {
+		return ""
+	}
+	return m[1]
+}
+
+// ClosesFence reports whether line closes a block opened with fence: the
+// same character, at least as many, and nothing after but spaces.
+func ClosesFence(line, fence string) bool {
+	m := fenceRe.FindStringSubmatch(strings.TrimRight(line, "\r\n"))
+	return m != nil && m[1][0] == fence[0] && len(m[1]) >= len(fence) && strings.TrimSpace(m[2]) == ""
+}
+
+// CodeSpans are the byte ranges of a line's code spans: a run of backticks
+// up to the next run of exactly as many (CommonMark 6.1).
+func CodeSpans(line string) [][2]int {
+	var out [][2]int
+	run := func(i int) int {
+		n := 0
+		for i+n < len(line) && line[i+n] == '`' {
+			n++
+		}
+		return n
+	}
+	for i := 0; i < len(line); {
+		n := run(i)
+		if n == 0 {
+			i++
+			continue
+		}
+		end := -1
+		for j := i + n; j < len(line); {
+			if m := run(j); m == 0 {
+				j++
+			} else if m == n {
+				end = j + m
+				break
+			} else {
+				j += m
+			}
+		}
+		if end < 0 {
+			i += n
+			continue
+		}
+		out = append(out, [2]int{i, end})
+		i = end
+	}
+	return out
+}
+
+type wikilinkMatch struct {
+	start, end  int // the whole match, an embed's "!" included
+	inner       [2]int
+	embed, file bool
+}
 
 // linkMatches finds the wikilinks in text that are links, as Obsidian
 // treats them: not inside inline code or a fenced code block, and not an
-// embed of a file other than a note (![[diagram.png]]).
+// embed of a file other than a note (![[diagram.png]]). Each is the
+// [[...]] and its inside, as regexp submatch indexes.
 func linkMatches(text string) [][]int {
+	var out [][]int
+	for _, m := range wikilinkMatches(text) {
+		if !m.file {
+			bracket := m.start
+			if m.embed {
+				bracket++
+			}
+			out = append(out, []int{bracket, m.end, m.inner[0], m.inner[1]})
+		}
+	}
+	return out
+}
+
+// wikilinkMatches finds every wikilink and embed outside code.
+func wikilinkMatches(text string) []wikilinkMatch {
 	var code [][2]int
 	offset := 0
-	inFence := false
+	fence := ""
 	fenceStart := 0
 	for _, line := range strings.SplitAfter(text, "\n") {
-		if fenceRe.MatchString(line) {
-			if inFence {
+		switch {
+		case fence != "":
+			if ClosesFence(line, fence) {
 				code = append(code, [2]int{fenceStart, offset + len(line)})
-			} else {
-				fenceStart = offset
+				fence = ""
 			}
-			inFence = !inFence
-		} else if !inFence {
-			for _, m := range inlineCodeRe.FindAllStringIndex(line, -1) {
+		case OpeningFence(line) != "":
+			fence, fenceStart = OpeningFence(line), offset
+		default:
+			for _, m := range CodeSpans(line) {
 				code = append(code, [2]int{offset + m[0], offset + m[1]})
 			}
 		}
 		offset += len(line)
 	}
-	if inFence {
+	if fence != "" {
 		code = append(code, [2]int{fenceStart, len(text)})
 	}
 	inCode := func(pos int) bool {
@@ -154,19 +233,22 @@ func linkMatches(text string) [][]int {
 		return false
 	}
 
-	var out [][]int
+	var out []wikilinkMatch
 	for _, m := range wikilinkRe.FindAllStringSubmatchIndex(text, -1) {
-		if inCode(m[0]) {
+		// A backslash before [[ makes it text.
+		if inCode(m[0]) || (m[0] > 0 && text[m[0]-1] == '\\') {
 			continue
 		}
+		wm := wikilinkMatch{start: m[0], end: m[1], inner: [2]int{m[2], m[3]}}
 		if m[0] > 0 && text[m[0]-1] == '!' {
+			wm.start, wm.embed = m[0]-1, true
 			target, _, _ := strings.Cut(text[m[2]:m[3]], "|")
 			target, _, _ = strings.Cut(target, "#")
 			if ext := fileExtRe.FindStringSubmatch(strings.TrimSpace(target)); ext != nil && !strings.EqualFold(ext[1], "md") {
-				continue
+				wm.file = true
 			}
 		}
-		out = append(out, m)
+		out = append(out, wm)
 	}
 	return out
 }
@@ -177,17 +259,20 @@ func linkMatches(text string) [][]int {
 // links changed.
 func RewriteWikilinks(text string, rewrite func(target string) (string, bool)) (string, int) {
 	changed := 0
-	out := ReplaceWikilinks(text, func(target, display string, hasDisplay bool) string {
+	var b strings.Builder
+	last := 0
+	for _, m := range linkMatches(text) {
+		target, sep, display, _ := splitLink(text[m[2]:m[3]])
+		b.WriteString(text[last:m[0]])
 		replacement, ok := rewrite(target)
-		if !ok {
-			replacement = target
-		} else {
+		if ok {
 			changed++
+		} else {
+			replacement = target
 		}
-		if hasDisplay {
-			return "[[" + replacement + "|" + display + "]]"
-		}
-		return "[[" + replacement + "]]"
-	})
-	return out, changed
+		b.WriteString("[[" + replacement + sep + display + "]]")
+		last = m[1]
+	}
+	b.WriteString(text[last:])
+	return b.String(), changed
 }

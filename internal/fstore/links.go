@@ -3,7 +3,6 @@ package fstore
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path"
 	"sort"
 	"strings"
@@ -39,10 +38,12 @@ type resolver struct {
 	slug, title, path, alias map[string]target
 }
 
-// resolver finds what a wikilink names, the way Obsidian reads it: by
-// slug, then title, then file path (whole or any trailing part), then
-// alias, then the ref's slug, ignoring case. When several files match, the
-// shortest path wins. Notes come before boards.
+// resolver finds what a wikilink names, the way Obsidian reads it: by file
+// path (whole or any trailing part), then kb's slug, then alias, ignoring
+// case. A frontmatter title, which Obsidian does not link by, and the
+// ref's slug come last, so a link Obsidian opens is never taken by
+// another note's title. When several files match, the shortest path wins.
+// Notes come before boards.
 func (s *Store) resolver() *resolver {
 	r := &resolver{
 		slug: map[string]target{}, title: map[string]target{},
@@ -114,7 +115,7 @@ func (r *resolver) resolve(ref string) target {
 	}
 	lower := strings.ToLower(name)
 	for _, t := range []target{
-		r.slug[name], r.title[lower], r.path[lower+".md"], r.alias[lower], r.slug[model.Slugify(name)],
+		r.path[lower+".md"], r.slug[name], r.alias[lower], r.title[lower], r.slug[model.Slugify(name)],
 	} {
 		if t.typ != "" {
 			return t
@@ -127,8 +128,8 @@ func (r *resolver) resolve(ref string) target {
 func (s *Store) buildLinks() {
 	r := s.resolver()
 	s.links = nil
-	add := func(sourceType, sourceID, text string) {
-		for _, pl := range model.ParseWikilinks(text) {
+	add := func(sourceType, sourceID string, parsed []model.ParsedLink) {
+		for _, pl := range parsed {
 			l := Link{SourceType: sourceType, SourceID: sourceID, TargetType: pl.TargetType, TargetRef: pl.TargetRef, Context: pl.Context}
 			if pl.TargetType == "note" {
 				if refName(pl.TargetRef) == "" {
@@ -148,13 +149,13 @@ func (s *Store) buildLinks() {
 	}
 	for _, n := range s.notes {
 		if n.ArchivedAt == nil {
-			add("note", n.ID, n.Body)
+			add("note", n.ID, s.parsedLinks(n.Path, "", n.Body))
 		}
 	}
 	for _, b := range s.boards {
 		for _, lane := range b.b.Lanes {
 			for _, it := range lane.Items() {
-				add("card", b.path+"#"+it.ID, it.RawText())
+				add("card", b.path+"#"+it.ID, s.parsedLinks(b.path, it.ID, it.RawText()))
 			}
 		}
 	}
@@ -178,7 +179,7 @@ func (s *Store) Backlinks(noteID string) []Backlink {
 				out = append(out, Backlink{SourceType: "note", SourceID: n.ID, Slug: n.Slug, Title: n.Title, Context: l.Context})
 			}
 		case "card":
-			boardPath, cardID, _ := strings.Cut(l.SourceID, "#")
+			boardPath, cardID, _ := cutHash(l.SourceID)
 			if b := s.boardByPath(boardPath); b != nil {
 				if it, _ := b.b.Find(cardID); it != nil {
 					out = append(out, Backlink{SourceType: "card", SourceID: cardID, Title: it.Title, Board: b.name(), Context: l.Context})
@@ -208,15 +209,15 @@ func (s *Store) RenameNote(id, newTitle string) (*Note, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	newSlug := model.Slugify(newTitle)
-	if newSlug == "" {
-		return nil, 0, fmt.Errorf("%q has no letters or digits to name a file after", newTitle)
+	if model.FileName(newTitle) == "" {
+		return nil, 0, fmt.Errorf("%q has nothing a file can be named after", newTitle)
 	}
+	newSlug := model.Slugify(newTitle)
 	for _, n := range s.ListNotes() {
 		if n.ID == id {
 			continue
 		}
-		if n.Slug == newSlug || strings.EqualFold(n.Title, newTitle) {
+		if (newSlug != "" && n.Slug == newSlug) || strings.EqualFold(n.Title, newTitle) {
 			return nil, 0, fmt.Errorf("another note is already called %q (%s)", newTitle, n.Path)
 		}
 		for _, a := range s.aliases[n.ID] {
@@ -245,50 +246,70 @@ func (s *Store) RenameNote(id, newTitle string) (*Note, int, error) {
 	}
 
 	newRel := path.Join(path.Dir(old.Path), noteFileName(newTitle, ""))
-	inPlace := strings.EqualFold(newRel, old.Path) // one file on a case-insensitive disk
-	if inPlace {
-		newRel = old.Path
+	// The file itself is renamed (a symlink stays one, the mode and Finder
+	// tags stay), then written under its new name. Both names are locked,
+	// in one order, so two renames never wait on each other.
+	// A name that differs only in case or Unicode form has the same lock.
+	first, second := old.Path, newRel
+	if lockKey(second) < lockKey(first) {
+		first, second = second, first
 	}
-	err = s.writeLocked(old.Path, func() error {
-		doc, err := s.readForWrite(old, "")
-		if err != nil {
-			return err
-		}
-		doc.SetTitle("")
-		if newTitle != stem(newRel) {
-			doc.SetTitle(newTitle)
-		}
-		doc.Body, _ = model.RewriteWikilinks(doc.Body, rewrite)
-		if inPlace {
-			_, err = s.vault.Write(old.Path, doc)
-			return err
-		}
-		if _, err := s.vault.Create(newRel, doc); err != nil {
-			if errors.Is(err, vault.ErrExists) {
-				return fmt.Errorf("a file already exists at %s", newRel)
+	lockSecond := func(fn func() error) error { return s.writeLocked(second, fn) }
+	if lockKey(first) == lockKey(second) {
+		lockSecond = func(fn func() error) error { return fn() }
+	}
+	err = s.writeLocked(first, func() error {
+		return lockSecond(func() error {
+			doc, err := s.readForWrite(old, "")
+			if err != nil {
+				return err
 			}
-			return err
-		}
-		if err := s.vault.Remove(old.Path); err != nil {
-			if undo := s.vault.Remove(newRel); undo != nil {
-				return fmt.Errorf("%w; the note is now in both %s and %s", err, old.Path, newRel)
+			doc.SetTitle("")
+			if newTitle != stem(newRel) {
+				doc.SetTitle(newTitle)
 			}
-			return err
-		}
-		return nil
+			doc.Body, _ = model.RewriteWikilinks(doc.Body, rewrite)
+			if newRel != old.Path {
+				if err := s.vault.Rename(old.Path, newRel); err != nil {
+					if errors.Is(err, vault.ErrExists) {
+						return fmt.Errorf("a file already exists at %s", newRel)
+					}
+					return err
+				}
+			}
+			if _, err := s.vault.Write(newRel, doc); err != nil {
+				if newRel != old.Path {
+					if undo := s.vault.Rename(newRel, old.Path); undo != nil {
+						return fmt.Errorf("%w; the note is now at %s, unchanged", err, newRel)
+					}
+				}
+				return err
+			}
+			return nil
+		})
 	})
 	if err != nil {
 		s.Reload()
 		return nil, 0, err
 	}
 
-	changed, errs := s.rewriteSources(id, rewrite)
-	if err := s.Reload(); err != nil {
+	var changed int
+	var errs []error
+	if err := s.batch(func() error {
+		changed, errs = s.rewriteSources(id, rewrite)
+		return nil
+	}); err != nil {
 		return nil, changed, err
 	}
 	note, err := s.GetNote(id)
 	if err != nil {
 		return nil, changed, err
+	}
+	// Links in notes still in iCloud are not known until they download.
+	for _, n := range s.notes {
+		if s.dataless[n.ID] {
+			errs = append(errs, fmt.Errorf("%s is in iCloud and not downloaded, so links in it to %q were not updated", n.Path, old.Title))
+		}
 	}
 	return note, changed, errors.Join(errs...)
 }
@@ -306,7 +327,7 @@ func (s *Store) rewriteSources(id string, rewrite func(string) (string, bool)) (
 			notes[l.SourceID] = true
 		}
 		if l.SourceType == "card" {
-			p, _, _ := strings.Cut(l.SourceID, "#")
+			p, _, _ := cutHash(l.SourceID)
 			boards[p] = true
 		}
 	}
@@ -346,18 +367,4 @@ func (s *Store) rewriteSources(id string, rewrite func(string) (string, bool)) (
 		}
 	}
 	return changed, errs
-}
-
-// rewriteNoteFile is used by workspace renames: it rewrites one key of a
-// note file as it is now.
-func (s *Store) readNoteFile(rel string) (*vault.Doc, error) {
-	abs, err := s.vault.Abs(rel)
-	if err != nil {
-		return nil, err
-	}
-	data, err := os.ReadFile(abs)
-	if err != nil {
-		return nil, err
-	}
-	return vault.Parse(data)
 }

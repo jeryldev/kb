@@ -86,6 +86,86 @@ func scenarios() []scenario {
 			b.Move(b.Lanes[0].Items()[0].ID, "Done", 0)
 			return b
 		}},
+		{"a star card moved into a dash lane, and back", "en", func(t *testing.T) *Board {
+			b := mustParse(t, "---\nkanban-plugin: board\n---\n\n## Star\n\n* [ ] s1\n* [ ] s2\n\n## Dash\n\n- [ ] d1\n- [ ] d2\n\n## Ordered\n\n1. [ ] o1\n2. [ ] o2\n")
+			s1 := b.Lanes[0].Items()[0]
+			d1 := b.Lanes[1].Items()[0]
+			o1 := b.Lanes[2].Items()[0]
+			b.MoveBefore(s1.ID, "Dash", b.Lanes[1].Items()[1].ID)
+			b.MoveBefore(d1.ID, "Star", "")
+			b.MoveBefore(o1.ID, "Dash", "")
+			b.MoveBefore(b.Lanes[1].Items()[0].ID, "Ordered", "")
+			b.ArchiveItem(b.Lanes[0].Items()[0].ID)
+			return b
+		}},
+		{"cards moved into indented and ordered lanes", "en", func(t *testing.T) *Board {
+			src, _ := os.ReadFile("testdata/src/indented.md")
+			b := mustParse(t, string(src))
+			ord, _ := os.ReadFile("testdata/src/ordered.md")
+			o := mustParse(t, string(ord))
+			b.Move(b.Lanes[0].Items()[0].ID, "Done", 0)
+			b.Add("Todo", "added under indented cards", "")
+			o.Add("Next", "added to an ordered lane", "two\nlines")
+			b.Lanes[0].Items()[2].SetTitle("tab marker, edited")
+			return b
+		}},
+		{"a lane after the archive, edited", "en", func(t *testing.T) *Board {
+			b := mustParse(t, "---\nkanban-plugin: board\n---\n\n## Todo\n\n- [ ] a ^abcd1234\n\n***\n\n## Archive\n\n- [x] old ^abcd5678\n\n## After\n\n- [ ] c ^abcd9999\n")
+			b.Add("Todo", "new", "")
+			b.Move("abcd9999", "Todo", 0)
+			return b
+		}},
+		{"a setext lane renamed, twins", "en", func(t *testing.T) *Board {
+			b := mustParse(t, "---\nkanban-plugin: board\n---\n\nTodo\n====\n\n- [ ] x\n- [ ] x\n- [ ] y\n\n## Done\n\n")
+			b.RenameLane("Todo", "Next")
+			b.Delete(b.Lanes[0].Items()[0].ID)
+			b.Add("Done", "z", "")
+			return b
+		}},
+		{"carets anywhere in card text", "en", func(t *testing.T) *Board {
+			b := New([]string{"Todo"})
+			b.Add("Todo", "mid caret", "see ^ref\nmore")
+			b.Add("Todo", "no space", "e = mc^2")
+			b.Add("Todo", "two in a word", "a^b^c")
+			b.Add("Todo", "in code", "run `x ^y`")
+			b.Add("Todo", "in a fence", "```\na ^b\n```")
+			b.Add("Todo", "in a link", "see [[a^b]]")
+			b.Add("Todo", "title mc^2", "")
+			c, _ := b.Add("Todo", "edited later", "")
+			c.SetDescription("first ^one\nlast^two")
+			return b
+		}},
+		{"a description ending in a caret word", "en", func(t *testing.T) *Board {
+			b := New([]string{"Todo"})
+			c, _ := b.Add("Todo", "card", "see the note ^ref")
+			c.SetPriority("high")
+			b.Add("Todo", "one line ^not-an-id-either", "")
+			return b
+		}},
+		{"a card added to a lane holding only text", "en", func(t *testing.T) *Board {
+			b := mustParse(t, "---\nkanban-plugin: board\n---\n\n## Todo\n\nSome notes about this lane\n\n## Done\n\n**Complete**\nwrap-up text\n")
+			b.Add("Todo", "new card", "")
+			b.Add("Done", "finished", "")
+			return b
+		}},
+		{"a CRLF board edited", "en", func(t *testing.T) *Board {
+			src, _ := os.ReadFile("testdata/src/crlf.md")
+			b := mustParse(t, string(src))
+			b.Lanes[0].Items()[0].SetDescription("new desc")
+			b.Move(b.Lanes[0].Items()[0].ID, "Done", 0)
+			b.Add("Todo", "fresh", "")
+			return b
+		}},
+		{"lanes named C# and Done ## edited", "en", func(t *testing.T) *Board {
+			src, _ := os.ReadFile("testdata/src/heading-hash.md")
+			b := mustParse(t, string(src))
+			b.Add("C#", "added", "")
+			b.Move(b.Lanes[1].Items()[0].ID, "C#", 0)
+			if err := b.RenameLane("F#", "F# done"); err != nil {
+				t.Fatal(err)
+			}
+			return b
+		}},
 		{"archive created on a German board", "de", func(t *testing.T) *Board {
 			b := mustParse(t, plugin(t, "german.de"))
 			b.ArchiveItem(b.Lanes[0].Items()[0].ID)

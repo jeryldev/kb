@@ -18,22 +18,32 @@ import (
 type Doc struct {
 	meta *yaml.Node
 	Body string
+
+	// What the file held, so that frontmatter kb did not change is written
+	// back exactly as it was (comments, quoting, indentation).
+	root    *yaml.Node // the document node: it holds a trailing comment
+	raw     string     // the frontmatter text between the delimiters
+	rawEnc  string     // meta as kb would encode it, when read
+	indent  int        // spaces the file indents with
+	crlf    bool       // the frontmatter's lines end in CRLF
+	bom     bool       // the file starts with a byte-order mark
+	hadMeta bool
 }
 
 func Parse(data []byte) (*Doc, error) {
 	// A byte-order mark (some Windows editors write one) would hide the
 	// frontmatter delimiter; it is dropped.
-	text := strings.TrimPrefix(string(data), "\ufeff")
+	text, bom := strings.CutPrefix(string(data), "\ufeff")
 	rest, ok := cutDelimiter(text)
 	if !ok {
-		return &Doc{Body: text}, nil
+		return &Doc{Body: text, bom: bom}, nil
 	}
 
 	var front string
 	for {
 		line, after, found := strings.Cut(rest, "\n")
 		if strings.TrimRight(line, "\r") == "---" {
-			doc := &Doc{Body: after}
+			doc := &Doc{Body: after, bom: bom, raw: front, crlf: strings.HasPrefix(text, "---\r\n")}
 			if !found {
 				doc.Body = ""
 			}
@@ -44,7 +54,7 @@ func Parse(data []byte) (*Doc, error) {
 		}
 		if !found {
 			// No closing delimiter: the leading "---" was a thematic break.
-			return &Doc{Body: text}, nil
+			return &Doc{Body: text, bom: bom}, nil
 		}
 		front += line + "\n"
 		rest = after
@@ -69,24 +79,66 @@ func (d *Doc) decode(front string) error {
 	if root.Content[0].Kind != yaml.MappingNode {
 		return fmt.Errorf("frontmatter is not a key/value mapping")
 	}
-	d.meta = root.Content[0]
+	d.root, d.meta, d.hadMeta = &root, root.Content[0], true
+	d.indent = indentOf(front)
+	d.rawEnc = d.encode()
 	return nil
 }
 
-func (d *Doc) Render() []byte {
-	if d.meta == nil || len(d.meta.Content) == 0 {
-		return []byte(d.Body)
+// indentOf is the indent of the first indented line of YAML that is not a
+// list item ("  - a" is indented by the list, not the mapping), or 2.
+func indentOf(front string) int {
+	for _, line := range strings.Split(front, "\n") {
+		trimmed := strings.TrimLeft(line, " ")
+		if n := len(line) - len(trimmed); n > 0 && trimmed != "" && !strings.HasPrefix(trimmed, "-") && !strings.HasPrefix(trimmed, "#") {
+			return n
+		}
 	}
+	return 2
+}
+
+// encode is the frontmatter as YAML text with LF line endings.
+func (d *Doc) encode() string {
 	var buf bytes.Buffer
-	buf.WriteString("---\n")
 	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(2)
+	enc.SetIndent(max(2, d.indent))
+	node := d.meta
+	if d.root != nil {
+		node = d.root // keeps a comment after the last key
+	}
 	// Encoding a node tree built by Parse or the setters cannot fail.
-	_ = enc.Encode(d.meta)
+	_ = enc.Encode(node)
 	_ = enc.Close()
-	buf.WriteString("---\n")
-	buf.WriteString(d.Body)
-	return buf.Bytes()
+	return buf.String()
+}
+
+// Render writes the note. Frontmatter whose values are as they were read
+// is written back as the file had it; changed frontmatter is encoded
+// again, in the file's indent, line endings and byte-order mark.
+func (d *Doc) Render() []byte {
+	var front string
+	switch {
+	case d.meta != nil && len(d.meta.Content) > 0:
+		front = d.encode()
+		if d.hadMeta && front == d.rawEnc {
+			front = d.raw
+		}
+		front = "---\n" + front + "---\n"
+	case d.hadMeta:
+		// No keys left. A body that starts with a delimiter would be read as
+		// frontmatter without them, so an empty block stays in front of it.
+		if _, ok := cutDelimiter(d.Body); ok {
+			front = "---\n---\n"
+		}
+	}
+	if d.crlf {
+		front = strings.ReplaceAll(strings.ReplaceAll(front, "\r\n", "\n"), "\n", "\r\n")
+	}
+	out := front + d.Body
+	if d.bom {
+		out = "\ufeff" + out
+	}
+	return []byte(out)
 }
 
 // Value is the frontmatter value of key as text, or "" if it is absent or
@@ -251,15 +303,28 @@ func (d *Doc) time(key string) *time.Time {
 	return nil
 }
 
+// setString sets a text key. A key that already says value is left as it
+// is written (quoted or not), so an unchanged save changes nothing.
 func (d *Doc) setString(key, value string) {
 	if value == "" {
+		if d.str(key) == "" && d.get(key) != nil && d.get(key).Kind == yaml.ScalarNode {
+			return // an empty key ("title:") stays as the user left it
+		}
 		d.set(key, nil)
+		return
+	}
+	if d.str(key) == value {
 		return
 	}
 	d.set(key, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value})
 }
 
+// setList sets a list key; a list that already holds items, in order, is
+// left as written (a block list stays a block list).
 func (d *Doc) setList(key string, items []string) {
+	if d.get(key) != nil && strings.Join(d.list(key, key == "aliases"), "\x00") == strings.Join(items, "\x00") {
+		return
+	}
 	if len(items) == 0 {
 		d.set(key, nil)
 		return

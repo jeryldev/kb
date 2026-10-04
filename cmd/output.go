@@ -80,7 +80,8 @@ type publishTargetJSON struct {
 type publicationJSON struct {
 	Note     string `json:"note"` // the note's slug
 	Target   string `json:"target"`
-	FilePath string `json:"file_path"`
+	FilePath string `json:"file_path"`           // relative to the site
+	FullPath string `json:"full_path,omitempty"` // where it is on this machine
 	Draft    bool   `json:"draft"`
 }
 
@@ -93,7 +94,8 @@ func formatTime(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	return t.Format(time.RFC3339)
+	// One zone for every time, this machine's, so times compare as text.
+	return t.Local().Format(time.RFC3339)
 }
 
 func orEmpty(list []string) []string {

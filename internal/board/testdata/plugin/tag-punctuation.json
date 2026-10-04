@@ -1,0 +1,50 @@
+{
+  "frontmatter": {
+    "kanban-plugin": "board"
+  },
+  "settings": {
+    "kanban-plugin": "board"
+  },
+  "lanes": [
+    {
+      "title": "Todo",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "learn #c++ and #a.b today #q? #x,y #ü #a&b #1984 #semi;colon",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": [
+            "#1984",
+            "#a",
+            "#a",
+            "#c",
+            "#q",
+            "#semi",
+            "#ü",
+            "#x"
+          ]
+        },
+        {
+          "titleRaw": "trailing #c++",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": [
+            "#c"
+          ]
+        },
+        {
+          "titleRaw": "nested #area/work-stuff #priority/high",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": [
+            "#area/work-stuff",
+            "#priority/high"
+          ]
+        }
+      ]
+    }
+  ],
+  "archive": []
+}

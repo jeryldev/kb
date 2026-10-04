@@ -26,15 +26,17 @@ func legacyDBPath() (string, error) {
 
 // checkImport stops kb while a 0.3 database waits to be imported, so that
 // nothing is written to the vault that the import would then collide with.
+// A kb.db that is not a database at all (empty, damaged) holds nothing to
+// import and never stops kb.
 func checkImport() error {
 	path, err := legacyDBPath()
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+	if !legacy.MayHoldData(path) {
 		return nil
 	}
-	return fmt.Errorf("found kb 0.3's database at %s; move its boards into the vault with: kb import (see what it would do with: kb import --dry-run)", path)
+	return fmt.Errorf("found kb 0.3's database at %s; move its boards into the vault with: kb import (see what it would do with: kb import --dry-run). If it is not kb 0.3's, move it aside: mv %q %q", path, path, path+".not-kb")
 }
 
 var importCmd = &cobra.Command{

@@ -9,11 +9,19 @@ import (
 )
 
 // tokens splits text into lowercase words of letters and digits with
-// accents removed, so that "Café" and "cafe" are the same word.
+// accents removed, so that "Café" and "cafe" are the same word. Chinese,
+// Japanese and Korean are written without spaces, so each of their
+// characters is a word of its own, and a query matches its characters.
 func tokens(text string) []string {
 	var b strings.Builder
 	for _, r := range norm.NFD.String(text) {
 		if unicode.Is(unicode.Mn, r) {
+			continue
+		}
+		if unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Hangul) {
+			b.WriteRune(' ')
+			b.WriteRune(r)
+			b.WriteRune(' ')
 			continue
 		}
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {

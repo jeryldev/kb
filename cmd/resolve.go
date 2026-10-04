@@ -78,9 +78,9 @@ func resolveLane(boardID, name string) (fstore.Lane, error) {
 
 var errCancelled = errors.New("cancelled")
 
-// confirm asks before something destructive. With --force it does not
-// ask; without a terminal to answer on (a script), it refuses, so a
-// script must say --force.
+// confirm asks before something destructive, on stderr, and reads the
+// answer from stdin, so a script can pipe one in. With --force it does
+// not ask; with no answer at all (stdin closed) it refuses.
 func confirm(cmd *cobra.Command, force bool, question string) error {
 	if force {
 		return nil

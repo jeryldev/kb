@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The release workflow runs these first and releases only if they pass.
+  workflow_call:
 
 permissions:
   contents: read
@@ -21,9 +23,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The newest patch of go.mod's Go version: patches carry security
+      # fixes govulncheck checks for. Change the minor with go.mod's.
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: "1.25.x"
+          check-latest: true
 
       - uses: actions/setup-node@v4
         with:
@@ -46,5 +51,10 @@ jobs:
         if: runner.os == 'Linux'
         run: command -v sqlite3 || (sudo apt-get update && sudo apt-get install -y sqlite3)
 
+      - name: go.mod and go.sum are tidy
+        run: go mod tidy -diff
       - run: go vet ./...
-      - run: go test -count=1 ./...
+      - run: go test -race -count=1 ./...
+      - name: Known vulnerabilities
+        # v1.1.4 runs on Go 1.25; later versions need Go 1.26.
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...

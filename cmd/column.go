@@ -89,17 +89,23 @@ var columnRenameCmd = &cobra.Command{
 }
 
 var columnReorderCmd = &cobra.Command{
-	Use:   "reorder <name,name,...>",
+	Use:   "reorder <name> <name>... | <name,name,...>",
 	Short: "Put the columns in a new order, naming every column once",
-	Args:  cobra.ExactArgs(1),
+	Long: `Put the columns in a new order, naming every column once: as separate
+arguments, or as one argument with the names separated by commas. A
+column whose name holds a comma is named in the first way.`,
+	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		board, err := currentBoard()
 		if err != nil {
 			return err
 		}
-		var names []string
-		for _, n := range strings.Split(args[0], ",") {
-			names = append(names, strings.TrimSpace(n))
+		names := args
+		if len(args) == 1 {
+			names = nil
+			for _, n := range strings.Split(args[0], ",") {
+				names = append(names, strings.TrimSpace(n))
+			}
 		}
 		if err := db.ReorderLanes(board.ID, names); err != nil {
 			return err

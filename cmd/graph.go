@@ -2,10 +2,11 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 
+	"github.com/jeryldev/kb/internal/fstore"
 	"github.com/jeryldev/kb/internal/graph"
 	"github.com/spf13/cobra"
 )
@@ -20,6 +21,9 @@ notes and boards, plus whatever they link to or from elsewhere.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		workspace, _ := cmd.Flags().GetString("workspace")
 		open, _ := cmd.Flags().GetBool("open")
+		if open && jsonOutput {
+			return fmt.Errorf("--open shows the graph in a browser and --json prints it; use one")
+		}
 		wsID := ""
 		if workspace != "" {
 			ws, err := resolveWorkspace(workspace)
@@ -58,23 +62,22 @@ func openGraphHTML(cmd *cobra.Command, data *graph.GraphData, workspace string) 
 	if err != nil {
 		return fmt.Errorf("generating HTML: %w", err)
 	}
-	f, err := os.CreateTemp("", "kb-graph-*.html")
+	// One page in kb's cache folder, replaced each time, so runs do not
+	// pile up files in the temporary folder.
+	opts, err := fstore.DefaultOptions()
 	if err != nil {
 		return err
 	}
-	if _, err := f.WriteString(page); err != nil {
-		f.Close()
-		return fmt.Errorf("writing %s: %w", f.Name(), err)
+	path := filepath.Join(filepath.Dir(opts.LockDir), "graph.html")
+	if err := writeFileAtomic(path, []byte(page)); err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
 	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	fmt.Fprintf(cmd.OutOrStdout(), "Graph written to %s\n", f.Name())
+	fmt.Fprintf(cmd.OutOrStdout(), "Graph written to %s\n", path)
 	opener := "xdg-open"
 	if runtime.GOOS == "darwin" {
 		opener = "open"
 	}
-	return exec.Command(opener, f.Name()).Start()
+	return exec.Command(opener, path).Start()
 }
 
 func init() {

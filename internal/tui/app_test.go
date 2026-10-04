@@ -100,6 +100,7 @@ func TestMovingIntoAFullColumnShowsTheLimit(t *testing.T) {
 	if !errors.As(app.err, &wip) {
 		t.Fatalf("err = %v, want the WIP limit", app.err)
 	}
+	app.Update(key("n")) // not over the limit
 	if app.board.moving || app.board.focusCol != 0 {
 		t.Errorf("the move should be undone: moving %v, column %d", app.board.moving, app.board.focusCol)
 	}

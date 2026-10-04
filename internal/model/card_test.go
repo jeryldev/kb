@@ -1,9 +1,6 @@
 package model
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestParsePriority(t *testing.T) {
 	tests := []struct {
@@ -89,26 +86,6 @@ func TestPriorityPrev(t *testing.T) {
 func TestPriorityString(t *testing.T) {
 	if PriorityHigh.String() != "high" {
 		t.Errorf("PriorityHigh.String() = %q, want %q", PriorityHigh.String(), "high")
-	}
-}
-
-func TestValidateCardTitle(t *testing.T) {
-	if err := ValidateCardTitle("Fix bug"); err != nil {
-		t.Errorf("ValidateCardTitle with valid title returned error: %v", err)
-	}
-
-	if err := ValidateCardTitle(""); err == nil {
-		t.Error("ValidateCardTitle with empty title should return error")
-	}
-
-	long := strings.Repeat("a", 201)
-	if err := ValidateCardTitle(long); err == nil {
-		t.Error("ValidateCardTitle with 201-char title should return error")
-	}
-
-	exactly200 := strings.Repeat("a", 200)
-	if err := ValidateCardTitle(exactly200); err != nil {
-		t.Errorf("ValidateCardTitle with 200-char title returned error: %v", err)
 	}
 }
 

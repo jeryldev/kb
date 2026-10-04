@@ -40,15 +40,16 @@ a terminal window for the full-screen view.
 New to kb? Start with: kb help start
 
 Card and column commands work on the current board: --board, else
-$KB_BOARD, else the board named after the folder you are in or after its
-git repository (worktrees included).
+$KB_BOARD, else the first board that exists named after the dev tmux
+session ($TMUX_SESSION_NAME), the folder you are in, or its git
+repository (worktrees included).
 
 Upgrading from kb 0.3? Run kb import once.`,
 	// Usage is for mistakes in how a command was typed, not for errors
 	// such as a note that does not exist.
 	SilenceUsage: true,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		if cmd.Name() == "help" || cmd.Name() == "version" || strings.HasPrefix(cmd.Name(), "__") || cmd.HasParent() && cmd.Parent().Name() == "completion" || cmd.Name() == "import" {
+		if cmd.Name() == "help" || strings.HasPrefix(cmd.Name(), "__") || cmd.HasParent() && cmd.Parent().Name() == "completion" || cmd.Name() == "import" {
 			return nil
 		}
 		if db != nil {
@@ -129,7 +130,7 @@ func versionString() string {
 func init() {
 	rootCmd.Version = versionString()
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
-	rootCmd.PersistentFlags().StringVarP(&boardFlag, "board", "B", "", "Board to use (default: $KB_BOARD, else the board named after the folder or its git repository)")
+	rootCmd.PersistentFlags().StringVarP(&boardFlag, "board", "B", "", "Board to use (default: $KB_BOARD, else the board named after the tmux session, the folder or its git repository)")
 }
 
 // boardCandidates are the boards the user may mean, in order: --board,
@@ -216,7 +217,7 @@ func currentBoard() (*model.Board, error) {
 	if boardFlag != "" || os.Getenv("KB_BOARD") != "" {
 		return nil, err
 	}
-	return nil, fmt.Errorf("no board named %s (taken from the folder and its repository); choose one with --board or $KB_BOARD, or create it with: kb board create %q", strings.Join(quoted(boardCandidates()), " or "), name)
+	return nil, fmt.Errorf("no board named %s (taken from the tmux session, the folder and its repository); choose one with --board or $KB_BOARD, or create it with: kb board create %q", strings.Join(quoted(boardCandidates()), " or "), name)
 }
 
 func quoted(names []string) []string {

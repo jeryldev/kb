@@ -1,6 +1,10 @@
 package fstore
 
-import "github.com/jeryldev/kb/internal/graph"
+import (
+	"strings"
+
+	"github.com/jeryldev/kb/internal/graph"
+)
 
 // GraphSource is everything the graph shows: notes, boards and the cards
 // that link to notes, with the links between them.
@@ -26,11 +30,11 @@ func (s *Store) GraphSource() graph.Source {
 	return src
 }
 
+// cutHash splits a card source id "<board path>#<card id>" at its last #:
+// a board's file name can hold one, a card id cannot.
 func cutHash(s string) (string, string, bool) {
-	for i := len(s) - 1; i >= 0; i-- {
-		if s[i] == '#' {
-			return s[:i], s[i+1:], true
-		}
+	if i := strings.LastIndexByte(s, '#'); i >= 0 {
+		return s[:i], s[i+1:], true
 	}
 	return s, "", false
 }

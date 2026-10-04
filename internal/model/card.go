@@ -94,13 +94,3 @@ func (c *Card) HasLabel(label string) bool {
 	}
 	return false
 }
-
-func ValidateCardTitle(title string) error {
-	if title == "" {
-		return fmt.Errorf("card title cannot be empty")
-	}
-	if len(title) > 200 {
-		return fmt.Errorf("card title cannot exceed 200 characters")
-	}
-	return nil
-}

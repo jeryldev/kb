@@ -82,17 +82,6 @@ func TestParseWikilinks(t *testing.T) {
 	}
 }
 
-func TestExtractMarkdownLinks(t *testing.T) {
-	input := "Visit [example](https://example.com) and [docs](https://docs.go.dev)"
-	got := ExtractMarkdownLinks(input)
-	if len(got) != 2 {
-		t.Fatalf("expected 2 links, got %d", len(got))
-	}
-	if got[0].TargetType != "url" || got[0].TargetRef != "https://example.com" {
-		t.Errorf("link[0] = %+v, want url/https://example.com", got[0])
-	}
-}
-
 func TestParseWikilinksDoNotSpanLines(t *testing.T) {
 	text := "a stray [[ opener\nmore prose\nand a real [[Target]] link"
 	links := ParseWikilinks(text)
@@ -116,5 +105,43 @@ func TestWikilinksInCodeAndImageEmbedsAreNotLinks(t *testing.T) {
 	out, n := RewriteWikilinks(text, func(target string) (string, bool) { return "X", true })
 	if n != 2 || !strings.Contains(out, "`[[B]]`") || !strings.Contains(out, "\n[[C]]\n") || !strings.Contains(out, "![[img.png]]") {
 		t.Errorf("rewrite touched code or images (%d):\n%s", n, out)
+	}
+}
+
+// Fences close as CommonMark closes them: with the same character, at
+// least as many of it, and nothing after but spaces. Any other fence-like
+// line inside the block is code, so links after the block still count.
+func TestFencesCloseOnlyOnAMatchingFence(t *testing.T) {
+	cases := map[string][]string{
+		"```\n~~~\n```\n\nSee [[Real]]\n":                         {"Real"},
+		"~~~\n```\n[[InCode]]\n~~~\n[[After]]\n":                  {"After"},
+		"````\n```\n[[InCode]]\n````\n[[After]]\n":                {"After"},
+		"```go\n[[InCode]]\n``` not a close\n```\n[[After]]":      {"After"},
+		"```\n[[InCode]]\n    ```\n[[StillCode]]\n```\n[[After]]": {"After"},
+		"``` info `with` backticks\n[[NotCode]]\n":                {"NotCode"},
+		"text ``a ` [[InSpan]] b`` [[Out]]\n":                     {"Out"},
+		"```\n[[Unclosed]]\n":                                     nil,
+	}
+	for text, want := range cases {
+		var got []string
+		for _, l := range ParseWikilinks(text) {
+			got = append(got, l.TargetRef)
+		}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("%q: links %v, want %v", text, got, want)
+		}
+	}
+}
+
+// In a table, a wikilink's pipe is written \| so the table keeps its
+// columns; a backslash before [[ makes it text.
+func TestTablePipesAndEscapedLinks(t *testing.T) {
+	links := ParseWikilinks(`| [[Note\|alias]] | \[[not a link]] | [[Real]] |`)
+	var got []string
+	for _, l := range links {
+		got = append(got, l.TargetRef+"="+l.Display)
+	}
+	if strings.Join(got, ",") != "Note=alias,Real=Real" {
+		t.Errorf("links = %v", got)
 	}
 }

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 type Note struct {
@@ -50,16 +52,21 @@ func (n *Note) HasTag(tag string) bool {
 	return false
 }
 
-var nonAlphanumeric = regexp.MustCompile(`[^a-z0-9]+`)
+var nonAlphanumeric = regexp.MustCompile(`[^\p{L}\p{N}]+`)
 
+// Slugify makes a lowercase slug of letters and digits joined by dashes.
+// Accents are folded ("Café" is "cafe"); letters of other scripts stay
+// ("中文", "мир"), so a title in any language has a slug.
 func Slugify(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	s = nonAlphanumeric.ReplaceAllString(s, "-")
-	s = strings.Trim(s, "-")
-	for strings.Contains(s, "--") {
-		s = strings.ReplaceAll(s, "--", "-")
+	var b strings.Builder
+	for _, r := range norm.NFD.String(strings.TrimSpace(s)) {
+		if !unicode.Is(unicode.Mn, r) {
+			b.WriteRune(unicode.ToLower(r))
+		}
 	}
-	return s
+	s = norm.NFC.String(b.String())
+	s = nonAlphanumeric.ReplaceAllString(s, "-")
+	return strings.Trim(s, "-")
 }
 
 func ValidateNoteTitle(title string) error {
@@ -72,14 +79,14 @@ func ValidateNoteTitle(title string) error {
 	return nil
 }
 
-var validSlug = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+var validSlug = regexp.MustCompile(`^[\p{Ll}\p{Lo}\p{Lm}\p{N}]+(-[\p{Ll}\p{Lo}\p{Lm}\p{N}]+)*$`)
 
 func ValidateNoteSlug(slug string) error {
 	if slug == "" {
 		return fmt.Errorf("note slug cannot be empty")
 	}
 	if !validSlug.MatchString(slug) {
-		return fmt.Errorf("note slug must be lowercase alphanumeric with hyphens")
+		return fmt.Errorf("note slug must be lowercase letters and digits joined by hyphens")
 	}
 	return nil
 }
