@@ -1,0 +1,43 @@
+{
+  "frontmatter": {
+    "kanban-plugin": "board"
+  },
+  "settings": {
+    "kanban-plugin": "board"
+  },
+  "lanes": [
+    {
+      "title": "Todo",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "one",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": []
+        },
+        {
+          "titleRaw": "two",
+          "checkChar": "x",
+          "blockId": "abcd0002",
+          "tags": []
+        }
+      ]
+    },
+    {
+      "title": "Next",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "other delim\n   with a description",
+          "checkChar": " ",
+          "blockId": null,
+          "tags": []
+        }
+      ]
+    }
+  ],
+  "archive": []
+}

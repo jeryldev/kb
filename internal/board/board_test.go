@@ -226,3 +226,19 @@ func TestIsBoard(t *testing.T) {
 		t.Error("a note with tasks is not a board")
 	}
 }
+
+// A board whose line endings are mixed (LF first, CRLF later, as some sync
+// tools leave them) keeps its frontmatter and reads its lanes.
+func TestMixedLineEndingsKeepTheFrontmatter(t *testing.T) {
+	src := "---\nkanban-plugin: board\r\n---\r\n\r\n## Todo\r\n\r\n- [ ] one ^abcd1234\r\n"
+	b, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b.frontLines) != 3 || len(b.Lanes) != 1 || b.Lanes[0].Title != "Todo" || len(b.Lanes[0].Items()) != 1 {
+		t.Fatalf("front %q, lanes %+v", b.frontLines, b.Lanes)
+	}
+	if got := string(b.Render()); got != src {
+		t.Errorf("a no-op round trip changed it:\n%q", got)
+	}
+}

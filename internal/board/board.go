@@ -43,9 +43,15 @@ type Board struct {
 	// the lines between them. It belongs to the archive, not to the lane
 	// read before it, so adding or reordering lanes keeps it in place.
 	archiveSep []string
-	salt       string
-	indent     string // continuation indent the file uses: a tab or 4 spaces
-	changed    bool   // a card was added, moved, archived or deleted
+	// archiveAt is how many lanes come before the archive. Lanes may
+	// follow it; archiveLast keeps it last as lanes are added.
+	archiveAt   int
+	archiveLast bool
+	salt        string
+	indent      string // continuation indent the file uses: a tab or 4 spaces
+	crlf        bool   // the file's lines end in CRLF
+	bom         bool   // the file starts with a byte-order mark
+	changed     bool   // a card was added, moved, archived or deleted
 }
 
 type Lane struct {
@@ -56,6 +62,7 @@ type Lane struct {
 	Complete bool
 
 	heading      string
+	underline    string // a setext heading's "===" line, or ""
 	origTitle    string
 	origMax      int
 	completeLine string // the file's own **Complete** marker, in its language
@@ -93,10 +100,20 @@ func ParseSalted(data []byte, salt string) (*Board, error) {
 	if err != nil {
 		return nil, err
 	}
-	lines := strings.Split(string(data), "\n")
-	b := &Board{Front: doc, salt: salt}
+	text, bom := strings.CutPrefix(string(data), "\ufeff")
+	lines := strings.Split(text, "\n")
+	b := &Board{Front: doc, salt: salt, bom: bom}
+	// A CRLF board is read without its CRs, which CommonMark and the plugin
+	// ignore, and written back with them.
+	if strings.HasSuffix(lines[0], "\r") {
+		b.crlf = true
+		for i, l := range lines {
+			lines[i] = strings.TrimSuffix(l, "\r")
+		}
+	}
 
 	body := lines
+	// The delimiters may still end in CR when the endings are mixed.
 	if len(lines) > 0 && strings.TrimRight(lines[0], "\r") == "---" {
 		for i := 1; i < len(lines); i++ {
 			if strings.TrimRight(lines[i], "\r") == "---" {
@@ -124,10 +141,15 @@ func ParseSalted(data []byte, salt string) (*Board, error) {
 			laneEnd = st.lanes[i+1].line
 		}
 		lane := &Lane{heading: body[ls.line], Complete: ls.complete, completeLine: ls.completeLine}
+		start := ls.line + 1
+		if ls.setext {
+			lane.underline = body[start]
+			start++
+		}
 		lane.Title, lane.MaxItems = parseLaneTitle(ls.title)
 		lane.origTitle, lane.origMax = lane.Title, lane.MaxItems
 		spans := ls.items
-		for l := ls.line + 1; l < laneEnd; {
+		for l := start; l < laneEnd; {
 			if len(spans) > 0 && spans[0].start == l {
 				lane.elems = append(lane.elems, elem{item: &Item{raw: body[spans[0].start : spans[0].end+1]}})
 				l = spans[0].end + 1
@@ -139,11 +161,13 @@ func ParseSalted(data []byte, salt string) (*Board, error) {
 		}
 		if ls.archive {
 			b.Archive = lane
+			b.archiveAt = len(b.Lanes)
 		} else {
 			b.Lanes = append(b.Lanes, lane)
 		}
 	}
 
+	b.archiveLast = b.archiveAt == len(b.Lanes)
 	b.takeArchiveSep()
 	b.decodeItems()
 	b.indent = "    "
@@ -162,10 +186,10 @@ var thematicBreak = regexp.MustCompile(`^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3
 // takeArchiveSep moves the thematic break before the Archive heading, and
 // what follows it, out of the last lane's lines.
 func (b *Board) takeArchiveSep() {
-	if b.Archive == nil || len(b.Lanes) == 0 {
+	if b.Archive == nil || b.archiveAt == 0 {
 		return
 	}
-	last := b.Lanes[len(b.Lanes)-1]
+	last := b.Lanes[b.archiveAt-1]
 	for i := len(last.elems) - 1; i >= 0; i-- {
 		e := last.elems[i]
 		if e.item != nil {
@@ -183,6 +207,7 @@ func (b *Board) takeArchiveSep() {
 
 type laneSpan struct {
 	line         int
+	setext       bool // the heading is a line of text over === or ---
 	title        string
 	archive      bool
 	complete     bool
@@ -226,14 +251,19 @@ func scanStructure(body []string) structure {
 				continue
 			}
 			line := lineOf(n.Lines().At(0).Start)
-			m := headingRe.FindStringSubmatch(body[line])
-			if m == nil {
+			var title string
+			setext := false
+			if m := headingRe.FindStringSubmatch(body[line]); m != nil {
+				title = headingText(m[1])
+			} else if n.Lines().Len() == 1 && line+1 < len(body) && setextUnderline.MatchString(body[line+1]) {
+				title, setext = strings.TrimSpace(body[line]), true
+			} else {
 				continue
 			}
-			title := strings.TrimSpace(strings.TrimRight(m[1], "#"))
 			prev := n.PreviousSibling()
 			st.lanes = append(st.lanes, laneSpan{
 				line:    line,
+				setext:  setext,
 				title:   title,
 				archive: isArchiveWord(title) && prev != nil && prev.Kind() == ast.KindThematicBreak,
 			})
@@ -313,6 +343,20 @@ func closingFence(body []string, item ast.Node, last int) int {
 	return last
 }
 
+// headingText drops an ATX heading's closing #s, which CommonMark counts
+// only after a space: "## C#" is the lane "C#", "## Done ##" is "Done".
+func headingText(s string) string {
+	if strings.Trim(s, "#") == "" {
+		return ""
+	}
+	return strings.TrimSpace(closingHashes.ReplaceAllString(s, ""))
+}
+
+var (
+	closingHashes   = regexp.MustCompile(`[ \t]+#+[ \t]*$`)
+	setextUnderline = regexp.MustCompile(`^ {0,3}(?:=+|-+)[ \t]*$`)
+)
+
 func isArchiveWord(title string) bool {
 	for _, m := range localeMarkers {
 		if title == m.Archive {
@@ -345,6 +389,7 @@ func parseLaneTitle(s string) (string, int) {
 func (b *Board) decodeItems() {
 	seen := map[string]bool{}
 	occurrences := map[string]int{}
+	keys := map[*Item]string{}
 	for _, lane := range b.allLanes() {
 		for _, it := range lane.Items() {
 			it.decode()
@@ -352,8 +397,27 @@ func (b *Board) decodeItems() {
 				key := lane.Title + "\x00" + it.Title
 				occurrences[key]++
 				it.ID = b.derivedID(key, occurrences[key], seen)
+				it.derived = true
+				keys[it] = key
 			}
 			seen[it.ID] = true
+		}
+	}
+	for it, key := range keys {
+		it.twin = occurrences[key] > 1
+	}
+}
+
+// pinTwins writes out the derived ids of cards that share a lane and a
+// title: their ids come from their order, so removing or moving one would
+// hand its id to another, and an id a script holds would name the wrong
+// card.
+func (b *Board) pinTwins() {
+	for _, l := range b.allLanes() {
+		for _, it := range l.Items() {
+			if it.derived && it.twin {
+				it.firstDirty = true
+			}
 		}
 	}
 }
@@ -368,14 +432,14 @@ func (b *Board) derivedID(key string, n int, seen map[string]bool) string {
 	}
 }
 
+// dedent removes one level of indent from a card's continuation line as
+// the plugin does (dedentNewLines): a tab or exactly four spaces, so a line
+// indented less keeps its spaces.
 func dedent(line string) string {
 	if strings.HasPrefix(line, "\t") {
 		return line[1:]
 	}
-	for i := 0; i < 4 && strings.HasPrefix(line, " "); i++ {
-		line = line[1:]
-	}
-	return line
+	return strings.TrimPrefix(line, "    ")
 }
 
 func (b *Board) allLanes() []*Lane {
@@ -445,12 +509,12 @@ func (b *Board) Find(id string) (*Item, *Lane) {
 func (b *Board) Add(laneTitle, title, description string) (*Item, error) {
 	lane := b.Lane(laneTitle)
 	if lane == nil {
-		return nil, fmt.Errorf("no lane %q", laneTitle)
+		return nil, fmt.Errorf("no column %q", laneTitle)
 	}
 	if err := ValidateCardTitle(title); err != nil {
 		return nil, err
 	}
-	it := &Item{ID: b.newID(), Check: ' ', bullet: lane.bullet(), raw: []string{""}}
+	it := &Item{ID: b.newID(), Check: ' ', bullet: lane.marker(), raw: []string{""}}
 	if lane.Complete {
 		it.Check = 'x'
 	}
@@ -473,7 +537,7 @@ func (b *Board) Move(id, laneTitle string, index int) error {
 	}
 	to := b.Lane(laneTitle)
 	if to == nil {
-		return fmt.Errorf("no lane %q", laneTitle)
+		return fmt.Errorf("no column %q", laneTitle)
 	}
 	from.remove(it)
 	switch {
@@ -481,6 +545,9 @@ func (b *Board) Move(id, laneTitle string, index int) error {
 		it.Check = 'x'
 	case from.Complete:
 		it.Check = ' '
+	}
+	if from != to {
+		it.lead, it.bullet = "", to.marker()
 	}
 	it.firstDirty = true
 	to.insert(it, index)
@@ -501,8 +568,10 @@ func (b *Board) ArchiveItem(id string) error {
 		name := b.archiveWord()
 		b.Archive = &Lane{Title: name, origTitle: name, heading: "## " + name, elems: []elem{{raw: ""}}}
 		b.newArchive = true
+		b.archiveAt, b.archiveLast = len(b.Lanes), true
 	}
 	from.remove(it)
+	it.lead, it.bullet = "", b.Archive.marker()
 	it.firstDirty = true
 	b.Archive.insert(it, len(b.Archive.Items()))
 	b.changed = true
@@ -533,10 +602,12 @@ func (b *Board) archiveWord() string {
 	return archiveName
 }
 
-// bullet is the list marker the lane's cards use, for new cards to match:
-// the plugin reads only a lane's first list, and a different marker would
-// start a second one.
-func (l *Lane) bullet() string {
+// marker is the list marker the lane's cards use, for a card added or
+// moved there to match: the plugin reads only a lane's first list, and a
+// different marker (* after -, or 1) after 1.) would start a second one,
+// hiding the card. Such a card starts at the margin (no lead): indented
+// as far as the text of the card above it, it would become part of it.
+func (l *Lane) marker() string {
 	for _, it := range l.Items() {
 		if it.bullet != "" {
 			return it.bullet
@@ -551,11 +622,13 @@ func ValidateLaneName(name string) error {
 	name = strings.TrimSpace(name)
 	switch {
 	case name == "":
-		return fmt.Errorf("lane name cannot be empty")
+		return fmt.Errorf("column name cannot be empty")
 	case strings.ContainsAny(name, "\r\n"):
-		return fmt.Errorf("lane name cannot span lines")
+		return fmt.Errorf("column name cannot span lines")
 	case maxItemsRe.MatchString(name):
-		return fmt.Errorf("lane name %q ends in a number in parentheses, which the Kanban plugin reads as the lane's card limit", name)
+		return fmt.Errorf("column name %q ends in a number in parentheses, which the Kanban plugin reads as the column's card limit", name)
+	case headingText(name) != name:
+		return fmt.Errorf("column name %q ends in #s, which a heading reads as closing marks", name)
 	}
 	return nil
 }
@@ -631,6 +704,11 @@ func (l *Lane) insert(it *Item, index int) {
 		if pos < len(l.elems) && l.elems[pos].item == nil && isCompleteMarker(l.elems[pos].raw) {
 			pos++
 		}
+		// Text right after the card would read as part of it (a lazy
+		// continuation line): keep a blank line between them.
+		if pos < len(l.elems) && l.elems[pos].item == nil && strings.TrimSpace(l.elems[pos].raw) != "" {
+			l.elems = append(l.elems[:pos], append([]elem{{raw: ""}}, l.elems[pos:]...)...)
+		}
 	}
 	l.elems = append(l.elems, elem{})
 	copy(l.elems[pos+1:], l.elems[pos:])
@@ -638,14 +716,17 @@ func (l *Lane) insert(it *Item, index int) {
 }
 
 func (l *Lane) render(indent string) []string {
-	heading := l.heading
+	out := []string{l.heading}
+	if l.underline != "" {
+		out = append(out, l.underline)
+	}
 	if l.Title != l.origTitle || l.MaxItems != l.origMax {
-		heading = "## " + l.Title
+		heading := "## " + l.Title
 		if l.MaxItems > 0 {
 			heading += fmt.Sprintf(" (%d)", l.MaxItems)
 		}
+		out = []string{heading}
 	}
-	out := []string{heading}
 	for _, e := range l.elems {
 		if e.item != nil {
 			out = append(out, e.item.render(indent)...)
@@ -667,7 +748,15 @@ func (b *Board) Render() []byte {
 		out = append(out, b.frontLines...)
 	}
 	out = append(out, b.pre...)
-	for _, l := range b.Lanes {
+	// A board kb changed writes its twin cards' ids (see pinTwins).
+	if b.changed {
+		b.pinTwins()
+	}
+	at := len(b.Lanes)
+	if b.Archive != nil && !b.archiveLast {
+		at = min(b.archiveAt, len(b.Lanes))
+	}
+	for _, l := range b.Lanes[:at] {
 		out = append(out, l.render(b.indent)...)
 	}
 	if b.Archive != nil {
@@ -680,6 +769,9 @@ func (b *Board) Render() []byte {
 		}
 		out = append(out, b.Archive.render(b.indent)...)
 	}
+	for _, l := range b.Lanes[at:] {
+		out = append(out, l.render(b.indent)...)
+	}
 	// The plugin finds its settings block only at the very end, and reads a
 	// line right after a card as part of that card: keep a blank line
 	// before the block once kb has changed the board.
@@ -689,7 +781,15 @@ func (b *Board) Render() []byte {
 		}
 	}
 	out = append(out, b.trailer...)
-	return []byte(strings.Join(out, "\n"))
+	sep := "\n"
+	if b.crlf {
+		sep = "\r\n"
+	}
+	text := strings.Join(out, sep)
+	if b.bom {
+		text = "\ufeff" + text
+	}
+	return []byte(text)
 }
 
 // MoveBefore puts a card in a lane just above another card, or at the end
@@ -699,7 +799,7 @@ func (b *Board) Render() []byte {
 func (b *Board) MoveBefore(id, laneTitle, beforeID string) error {
 	to := b.Lane(laneTitle)
 	if to == nil {
-		return fmt.Errorf("no lane %q", laneTitle)
+		return fmt.Errorf("no column %q", laneTitle)
 	}
 	index := len(to.Items())
 	if beforeID != "" {
@@ -710,7 +810,7 @@ func (b *Board) MoveBefore(id, laneTitle, beforeID string) error {
 			}
 		}
 		if index < 0 {
-			return fmt.Errorf("no card %q in lane %q", beforeID, laneTitle)
+			return fmt.Errorf("no card %q in column %q", beforeID, laneTitle)
 		}
 	}
 	it, from := b.Find(id)
@@ -729,11 +829,12 @@ func (b *Board) MoveBefore(id, laneTitle, beforeID string) error {
 
 // AddLane appends an empty lane after the others (before the archive).
 func (b *Board) AddLane(name string) error {
+	name = strings.TrimSpace(name)
 	if err := ValidateLaneName(name); err != nil {
 		return err
 	}
 	if b.Lane(name) != nil {
-		return fmt.Errorf("lane %q already exists", name)
+		return fmt.Errorf("column %q already exists", name)
 	}
 	if n := len(b.Lanes); n > 0 {
 		last := b.Lanes[n-1]
@@ -754,29 +855,44 @@ func (b *Board) RemoveLane(name string) error {
 	for i, l := range b.Lanes {
 		if strings.EqualFold(l.Title, name) {
 			if len(l.Items()) > 0 {
-				return fmt.Errorf("lane %q still has %d cards", l.Title, len(l.Items()))
+				return fmt.Errorf("column %q still has %d cards", l.Title, len(l.Items()))
+			}
+			for _, e := range l.elems {
+				if strings.TrimSpace(e.raw) != "" && !isCompleteMarker(e.raw) {
+					return fmt.Errorf("column %q holds text besides cards (%q); move or delete it in the file first", l.Title, strings.TrimSpace(e.raw))
+				}
 			}
 			b.Lanes = append(b.Lanes[:i], b.Lanes[i+1:]...)
+			if i < b.archiveAt {
+				b.archiveAt--
+			}
 			b.changed = true
 			return nil
 		}
 	}
-	return fmt.Errorf("no lane %q", name)
+	return fmt.Errorf("no column %q", name)
 }
 
 // RenameLane changes a lane's title, keeping its card limit.
 func (b *Board) RenameLane(from, to string) error {
 	l := b.Lane(from)
 	if l == nil {
-		return fmt.Errorf("no lane %q", from)
+		return fmt.Errorf("no column %q", from)
 	}
+	to = strings.TrimSpace(to)
 	if err := ValidateLaneName(to); err != nil {
 		return err
 	}
 	if other := b.Lane(to); other != nil && other != l {
-		return fmt.Errorf("lane %q already exists", to)
+		return fmt.Errorf("column %q already exists", to)
 	}
 	l.Title = to
+	// Ids kb derived from the old title would change: write them out.
+	for _, it := range l.Items() {
+		if it.derived {
+			it.firstDirty = true
+		}
+	}
 	b.changed = true
 	return nil
 }
@@ -785,17 +901,17 @@ func (b *Board) RenameLane(from, to string) error {
 // lane exactly once.
 func (b *Board) ReorderLanes(names []string) error {
 	if len(names) != len(b.Lanes) {
-		return fmt.Errorf("name all %d lanes to reorder them, got %d", len(b.Lanes), len(names))
+		return fmt.Errorf("name all %d columns to reorder them, got %d", len(b.Lanes), len(names))
 	}
 	var out []*Lane
 	seen := map[*Lane]bool{}
 	for _, n := range names {
 		l := b.Lane(n)
 		if l == nil {
-			return fmt.Errorf("no lane %q", n)
+			return fmt.Errorf("no column %q", n)
 		}
 		if seen[l] {
-			return fmt.Errorf("lane %q named twice", n)
+			return fmt.Errorf("column %q named twice", n)
 		}
 		seen[l] = true
 		out = append(out, l)

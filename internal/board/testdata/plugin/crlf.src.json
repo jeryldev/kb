@@ -1,0 +1,37 @@
+{
+  "frontmatter": {
+    "kanban-plugin": "board"
+  },
+  "settings": {
+    "kanban-plugin": "board"
+  },
+  "lanes": [
+    {
+      "title": "Todo",
+      "maxItems": 0,
+      "complete": false,
+      "items": [
+        {
+          "titleRaw": "one\ndesc line",
+          "checkChar": " ",
+          "blockId": "abcd2222",
+          "tags": []
+        }
+      ]
+    },
+    {
+      "title": "Done",
+      "maxItems": 0,
+      "complete": true,
+      "items": [
+        {
+          "titleRaw": "done",
+          "checkChar": "x",
+          "blockId": "abcd3333",
+          "tags": []
+        }
+      ]
+    }
+  ],
+  "archive": []
+}
