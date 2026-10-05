@@ -172,6 +172,11 @@ var cardEditCmd = &cobra.Command{
 			return err
 		}
 		flags := cmd.Flags()
+		// -T is the title here as on note edit (where -t is the tags).
+		if flags.Changed("title-T") {
+			title, _ := flags.GetString("title-T")
+			flags.Set("title", title)
+		}
 		if !changedAny(cmd, "title", "description", "labels", "priority", "external-id") {
 			return fmt.Errorf("nothing to change; give at least one of --title, --description, --priority, --labels or --external-id")
 		}
@@ -341,7 +346,9 @@ func init() {
 	cardAddCmd.Flags().StringP("external-id", "e", "", "ID in another system")
 	cardAddCmd.Flags().BoolP("force", "f", false, "Add even if the column is at its WIP limit")
 
-	cardEditCmd.Flags().StringP("title", "t", "", "New title")
+	cardEditCmd.Flags().StringP("title", "t", "", "New title (-T works too, as on note edit)")
+	cardEditCmd.Flags().StringP("title-T", "T", "", "New title")
+	cardEditCmd.Flags().MarkHidden("title-T")
 	cardEditCmd.Flags().StringP("description", "d", "", "New description")
 	cardEditCmd.Flags().StringP("labels", "l", "", "New labels, comma-separated (\"\" clears them)")
 	cardEditCmd.Flags().StringP("priority", "p", "", "New priority (low, medium, high, urgent)")

@@ -125,8 +125,8 @@ every [[link]] to the old name, in notes and cards.
 
   kb note rename "petty cash" "Petty Cash Fund"
 
-Links inside code (between backticks, or in a fenced code block) are
-text, not links.`,
+Links inside code (between backticks, in a fenced code block, or in a
+block indented four spaces after a blank line) are text, not links.`,
 }
 
 var kanbanGuide = &cobra.Command{
@@ -157,7 +157,7 @@ Cards
   kb cards -B study -p high -l far       filter by priority, label, column
                                          (-c) or words (-s)
   kb card show <id> -B study
-  kb card edit <id> -B study -t "Review FAR 01 to 03" -p urgent
+  kb card edit <id> -B study -T "Review FAR 01 to 03" -p urgent
   kb card move <id> Done -B study        to the end of Done
   kb card move <id> Todo --before <other id> -B study   above a card in Todo
   kb card archive <id> -B study          to the board's Archive
@@ -288,6 +288,9 @@ Environment
   TMUX_SESSION_NAME   set by dev; names the board when KB_BOARD is not
   KB_BOARDS_DIR   where kb board create puts boards ("Boards")
   KB_DAILY_DIR    where kb daily puts daily notes ("daily")
+  KB_LANG         Obsidian's language (de, ja, zh...), which the
+                  Kanban plugin reads the Archive heading and the
+                  **Complete** marker in
   VISUAL, EDITOR  the editor kb open and kb daily start
   XDG_CONFIG_HOME, XDG_CACHE_HOME   instead of ~/.config and ~/.cache
   XDG_DATA_HOME   where kb 0.3's kb.db is looked for (~/.local/share)
@@ -383,7 +386,7 @@ func init() {
 	cardAddCmd.Example = `  kb card add "Review FAR 01" -B study
   kb card add "Review FAR 01" -B study -c Todo -p high -l "far, review" -d "Chapters 1 to 3"`
 	cardShowCmd.Example = `  kb card show 8899 -B study`
-	cardEditCmd.Example = `  kb card edit 8899 -B study -t "Review FAR 01 to 03" -p urgent
+	cardEditCmd.Example = `  kb card edit 8899 -B study -T "Review FAR 01 to 03" -p urgent
   kb card edit 8899 -B study -l ""          (clear the labels)`
 	cardMoveCmd.Example = `  kb card move 8899 "In Progress" -B study
   kb card move 8899 Todo --before 3c05 -B study`

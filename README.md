@@ -101,7 +101,7 @@ workspace: backend
 - Priority is a `#priority/high` tag. Medium is the default and is not written.
 - The text after `^` is the card's id. It is unique within its board, and kb finds a card by it, or by its first 4 or more characters, on any board.
 - An external id (Jira, GitHub, Linear) is a `[ext:: …]` field.
-- Archived cards go under the board's Archive heading, as the plugin does.
+- Archived cards go under the board's Archive heading, as the plugin does, in the language Obsidian runs in, which the plugin reads the **Complete** marker and the Archive heading in. Set `$KB_LANG` to Obsidian's language (`de`, `ja`, `zh`...; one the plugin has no words for reads as English). Without it kb goes by the board's **Complete** marker, and with no marker either, an Archive heading in any language counts.
 
 ```bash
 kb boards                              # every board in the vault
@@ -113,7 +113,7 @@ kb cards                               # cards on the current board
 kb cards -p urgent -l auth -c Todo -s login   # filters
 kb card add "Write tests" -c Todo -p high -d "unit and e2e" -l "qa" -e GH-7
 kb card show 889962bb
-kb card edit 8899 -t "Fix the login bug" -p high
+kb card edit 8899 -T "Fix the login bug" -p high   # -T is the title, as on note edit (-t works too)
 kb card move 8899 Done                 # to the end of Done
 kb card move 8899 Todo --before 3f9a   # above another card
 kb card archive 8899
@@ -277,7 +277,7 @@ The JSON fields:
 - `kb note delete --json` adds `trashed`, where the file went; `kb daily --json` prints the note instead of opening it. `kb import` prints text only.
 - Times are RFC 3339 in this machine's time zone.
 - **publish**: `note`, `target`, `file_path` (in the site), `full_path` (on this machine), `draft`; `--dry-run --json` adds `content`
-- **graph**: `nodes` (`id`, `label`, `type`, `slug`, `workspace_id`, `connections`, `outside`) and `edges` (`source`, `target`, `context`); a card's node id is `<board path>#<card id>`
+- **graph**: `nodes` (`id`, `label`, `type`, `slug`, `workspace_id`, `connections`, `outside`) and `edges` (`source`, `target`, `context`); a card's node id is `<board path>#<card id>`, and a card node also has `card_id` and `board` as `kb cards --json` names them
 
 Commands that delete ask on stderr and read the answer from stdin. With no answer (a script) they stop with an error, so a script passes `--force` (`-f`). Errors exit with status 1.
 
@@ -308,9 +308,9 @@ With [dev-session-manager](https://github.com/jeryldev/dev-session-manager), `pr
 | Workspaces | `.kb/workspaces.yml` in the vault |
 | Deleted notes and boards | `.trash/` in the vault, as Obsidian does |
 | Publish sites, workspace folders | `~/.config/kb` (`$XDG_CONFIG_HOME`) |
-| Locks that keep two kb processes from clobbering a file | `~/.cache/kb/locks` (`$XDG_CACHE_HOME`) |
+| Locks that keep two kb processes from clobbering a file (a fixed set of small files; empty the folder only when no kb is running) | `~/.cache/kb/locks` (`$XDG_CACHE_HOME`) |
 
-kb writes each file atomically, under a lock, and an edit to a note or card that changed on disk since kb read it is refused rather than overwrite the other change. The lock is the same however the vault is named (a symlink, or another letter case on macOS). A settings file kb cannot read (`workspaces.yml`, `publish.yml`) is reported as a warning and never written over until you fix it; changing a workspace edits only its entry in `workspaces.yml`, keeping comments and keys kb does not know. A note's frontmatter that kb did not change is written back as it was, comments, quoting and line endings included. A note in iCloud that is not downloaded shows by name, with a warning, and is never overwritten.
+kb writes each file atomically, under a lock, and an edit to a note or card that changed on disk since kb read it is refused rather than overwrite the other change. The lock is the same however the vault is named (a symlink, or another letter case on macOS). A settings file kb cannot read (`workspaces.yml`, `publish.yml`) is reported as a warning and never written over until you fix it; changing a workspace edits only its entry in `workspaces.yml`, keeping comments and keys kb does not know. A note's frontmatter that kb did not change is written back as it was, comments, quoting and line endings included. A note in iCloud that is not downloaded shows by name, with a warning, and is never overwritten. A note and a board cannot share a name, which would make `[[Name]]` name two things.
 
 ## Limitations
 
