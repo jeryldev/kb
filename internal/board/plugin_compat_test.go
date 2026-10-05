@@ -166,6 +166,11 @@ func scenarios() []scenario {
 			}
 			return b
 		}},
+		{"an English marker while Obsidian is German", "de", func(t *testing.T) *Board {
+			b := mustParse(t, "---\nkanban-plugin: board\n---\n\n## Done\n\n**Complete**\n- [x] a ^abcd1234\n\n***\n\n## Archiv\n\n- [ ] b ^abcd5678\n")
+			b.Add("Done", "c", "")
+			return b
+		}},
 		{"archive created on a German board", "de", func(t *testing.T) *Board {
 			b := mustParse(t, plugin(t, "german.de"))
 			b.ArchiveItem(b.Lanes[0].Items()[0].ID)
@@ -178,6 +183,8 @@ func TestThePluginReadsWhatKbWrites(t *testing.T) {
 	path := harness(t)
 	for _, sc := range scenarios() {
 		t.Run(sc.name, func(t *testing.T) {
+			// kb reads the board in the language the plugin runs in.
+			t.Setenv("KB_LANG", sc.lang)
 			intended := sc.make(t)
 			written := intended.Render()
 			mine := mustParse(t, string(written))
