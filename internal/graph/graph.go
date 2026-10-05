@@ -16,6 +16,9 @@ type Node struct {
 	// Outside marks a node from another workspace, shown because it links
 	// to (or from) the workspace the graph is for.
 	Outside bool `json:"outside,omitempty"`
+	// A card's id and board, as kb cards --json names them.
+	CardID string `json:"card_id,omitempty"`
+	Board  string `json:"board,omitempty"`
 }
 
 type Edge struct {
@@ -29,11 +32,14 @@ type GraphData struct {
 	Edges []Edge `json:"edges"`
 }
 
-// Item is a board or a card in the graph.
+// Item is a board or a card in the graph. A card also has its id and
+// board's name, as kb cards names them.
 type Item struct {
 	ID          string
 	Label       string
 	WorkspaceID string
+	CardID      string
+	Board       string
 }
 
 // Link is one link between two of the graph's notes, boards or cards.
@@ -63,7 +69,7 @@ func Build(src Source, workspaceID string) *GraphData {
 		all[b.ID] = Node{ID: b.ID, Label: b.Label, Type: "board", WorkspaceID: b.WorkspaceID}
 	}
 	for _, c := range src.Cards {
-		all[c.ID] = Node{ID: c.ID, Label: c.Label, Type: "card", WorkspaceID: c.WorkspaceID}
+		all[c.ID] = Node{ID: c.ID, Label: c.Label, Type: "card", WorkspaceID: c.WorkspaceID, CardID: c.CardID, Board: c.Board}
 	}
 	inScope := func(id string) bool {
 		n, ok := all[id]
