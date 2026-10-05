@@ -153,6 +153,18 @@ func noteFileName(title, slug string) string {
 	return "Untitled.md"
 }
 
+// boardNamed refuses a note file name a board already has: links to that
+// name name the board, and a note would take them from it.
+func (s *Store) boardNamed(fileName string) error {
+	name := strings.TrimSuffix(fileName, ".md")
+	for _, b := range s.boards {
+		if strings.EqualFold(b.name(), name) {
+			return fmt.Errorf("a board is called %q (%s); a note with that name would take its [[links]]", b.name(), b.path)
+		}
+	}
+	return nil
+}
+
 // CreateNote creates a note named after its title (or slug, when one is
 // given that differs from the title's).
 func (s *Store) CreateNote(title, slug, body, workspaceID string, tags ...string) (*Note, error) {
@@ -200,6 +212,9 @@ func (s *Store) CreateNoteAt(rel, title, body, workspaceID string, tags ...strin
 	}
 	if !strings.EqualFold(path.Ext(rel), ".md") {
 		return nil, fmt.Errorf("note path %q must end in .md", rel)
+	}
+	if err := s.boardNamed(path.Base(rel)); err != nil {
+		return nil, err
 	}
 	now := time.Now().Truncate(time.Second)
 	doc := &vault.Doc{Body: body}
@@ -384,7 +399,7 @@ func (s *Store) moveToTrash(rel string) (string, error) {
 		dst := filepath.Join(s.vault.Root(), filepath.FromSlash(candidate))
 		// Holding the name's lock, another kb cannot trash a file to it
 		// between the check and the rename, which would replace that file.
-		unlock, err := lockFile(s.opts.LockDir, dst)
+		unlock, err := s.trashLock(dst)
 		if err != nil {
 			return "", err
 		}

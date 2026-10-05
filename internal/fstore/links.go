@@ -212,6 +212,9 @@ func (s *Store) RenameNote(id, newTitle string) (*Note, int, error) {
 	if model.FileName(newTitle) == "" {
 		return nil, 0, fmt.Errorf("%q has nothing a file can be named after", newTitle)
 	}
+	if err := s.boardNamed(noteFileName(newTitle, "")); err != nil {
+		return nil, 0, err
+	}
 	newSlug := model.Slugify(newTitle)
 	for _, n := range s.ListNotes() {
 		if n.ID == id {
@@ -249,17 +252,24 @@ func (s *Store) RenameNote(id, newTitle string) (*Note, int, error) {
 	// The file itself is renamed (a symlink stays one, the mode and Finder
 	// tags stay), then written under its new name. Both names are locked,
 	// in one order, so two renames never wait on each other.
-	// A name that differs only in case or Unicode form has the same lock.
+	// The two locks are taken in the order of the lock files writeLocked
+	// takes for them, which every kb follows, so two renames never each
+	// hold the lock the other waits for (a name sharing the other's lock
+	// file is held again, not waited on).
 	first, second := old.Path, newRel
-	if lockKey(second) < lockKey(first) {
+	oldAbs, err := s.lockTarget(old.Path)
+	if err != nil {
+		return nil, 0, err
+	}
+	newAbs, err := s.lockTarget(newRel)
+	if err != nil {
+		return nil, 0, err
+	}
+	if lockName(newAbs) < lockName(oldAbs) {
 		first, second = second, first
 	}
-	lockSecond := func(fn func() error) error { return s.writeLocked(second, fn) }
-	if lockKey(first) == lockKey(second) {
-		lockSecond = func(fn func() error) error { return fn() }
-	}
 	err = s.writeLocked(first, func() error {
-		return lockSecond(func() error {
+		return s.writeLocked(second, func() error {
 			doc, err := s.readForWrite(old, "")
 			if err != nil {
 				return err

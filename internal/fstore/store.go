@@ -85,9 +85,10 @@ type Store struct {
 	problems []string
 
 	workspaces []*model.Workspace
-	reloads    int  // how many times the vault was read, for tests
-	parsed     int  // how many files were parsed, for tests
-	inBatch    bool // writes are under way that read the vault once at the end
+	reloads    int                  // how many times the vault was read, for tests
+	parsed     int                  // how many files were parsed, for tests
+	inBatch    bool                 // writes are under way that read the vault once at the end
+	held       map[string]*heldLock // lock files this store holds, by name
 
 	// cache holds each file as last parsed, by path. Reload parses again
 	// only a file whose size or modification time changed, or that kb
@@ -413,19 +414,28 @@ func (s *Store) batch(fn func() error) error {
 	return s.reloadAfter(err)
 }
 
-// writeLocked runs fn holding the lock for one vault file, so that kb
-// processes never interleave a read-modify-write of the same file.
-func (s *Store) writeLocked(rel string, fn func() error) error {
+// lockTarget is the path a vault file is locked as: its absolute path, or
+// for a symlinked note the file it points to, which another name for it
+// shares.
+func (s *Store) lockTarget(rel string) (string, error) {
 	abs, err := s.vault.Abs(rel)
 	if err != nil {
-		return err
+		return "", err
 	}
-	// A symlinked note is locked as the file it points to, which another
-	// name for it shares.
 	if fi, err := os.Lstat(abs); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 		abs = ResolvePath(abs)
 	}
-	unlock, err := lockFile(s.opts.LockDir, abs)
+	return abs, nil
+}
+
+// writeLocked runs fn holding the lock for one vault file, so that kb
+// processes never interleave a read-modify-write of the same file.
+func (s *Store) writeLocked(rel string, fn func() error) error {
+	abs, err := s.lockTarget(rel)
+	if err != nil {
+		return err
+	}
+	unlock, err := s.lockPath(abs)
 	if err != nil {
 		return err
 	}

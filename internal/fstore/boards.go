@@ -77,17 +77,21 @@ func (s *Store) rewriteBoardLinks(rel string, rewrite func(string) (string, bool
 	err := s.updateBoardFile(rel, func(b *boardDoc) error {
 		for _, lane := range append(append([]*board.Lane{}, b.Lanes...), archiveOf(b)...) {
 			for _, it := range lane.Items() {
-				title, n1 := model.RewriteWikilinks(it.Title, rewrite)
-				desc, n2 := model.RewriteWikilinks(it.Description, rewrite)
-				if n1 > 0 {
+				// Rewritten as one text, title then description, as the
+				// links were read: what is code depends on what comes
+				// before (an indented first line is not a code block).
+				text, n := model.RewriteWikilinks(it.Title+"\n"+it.Description, rewrite)
+				if n == 0 {
+					continue
+				}
+				title, desc, _ := strings.Cut(text, "\n")
+				if title != it.Title {
 					it.SetTitle(title)
 				}
-				if n2 > 0 {
+				if desc != it.Description {
 					it.SetDescription(desc)
 				}
-				if n1+n2 > 0 {
-					changed++
-				}
+				changed++
 			}
 		}
 		return nil
@@ -199,6 +203,13 @@ func (s *Store) CreateBoardFrom(name string, b *board.Board) (*model.Board, erro
 	rel, err := s.BoardPath(name)
 	if err != nil {
 		return nil, err
+	}
+	// [[Name]] names notes before boards: a board named like a note could
+	// never be linked to by its name.
+	for _, n := range s.notes {
+		if strings.EqualFold(stem(n.Path), stem(rel)) {
+			return nil, fmt.Errorf("a note is called %q (%s); a board with that name could not be linked to by it", stem(n.Path), n.Path)
+		}
 	}
 	err = s.writeLocked(rel, func() error {
 		_, err := s.vault.Create(rel, &vault.Doc{Body: string(b.Render())})
