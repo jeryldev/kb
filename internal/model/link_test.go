@@ -145,3 +145,57 @@ func TestTablePipesAndEscapedLinks(t *testing.T) {
 		t.Errorf("links = %v", got)
 	}
 }
+
+// Code that spans lines, indented code blocks and fences inside list
+// items are code; an indented line continuing a list item is not.
+func TestCodeAcrossLinesAndIndents(t *testing.T) {
+	for text, want := range map[string]string{
+		"a `code\n[[InSpan]]` b [[After]]":                        "After",
+		"Para\n\n    [[IndentedCode]]\n\nAfter [[Real]]":          "Real",
+		"- item\n\n    [[ListContinuation]]":                      "ListContinuation",
+		"- item\n    ```\n    [[InFence]]\n    ```\n[[After]]":    "After",
+		"1. step\n   ~~~\n   [[InFence]]\n   ~~~\n\nthen [[Out]]": "Out",
+		"text\n    [[LazyLineIsText]]":                            "LazyLineIsText",
+	} {
+		var got []string
+		for _, l := range ParseWikilinks(text) {
+			got = append(got, l.TargetRef)
+		}
+		if strings.Join(got, ",") != want {
+			t.Errorf("%q: links %v, want %s", text, got, want)
+		}
+	}
+}
+
+// A code span cannot run past a heading, a thematic break, a table row or
+// a new list item, an escaped backtick opens none, and a fence opened at
+// the margin after a list is not part of the list.
+func TestCodeSpansStopAtBlockBoundaries(t *testing.T) {
+	for text, want := range map[string]string{
+		"# Use ` key\nSee [[A]] and `x`":              "A",
+		"- run `a\n\t- see [[A]] `b`":                 "A",
+		"- run `a\n    - see [[A]] `b`":               "A",
+		"Use \\` then\nsee [[A]] and `x`":             "A",
+		"Some ` text\n***\nSee [[A]] `x`":             "A",
+		"| a ` b |\n| see [[A]] | `x` |":              "A",
+		"- a\n\n```\n    ```\n[[InCode]]\n```\n[[B]]": "B",
+		"- item\n\t```\n\t[[InFence]]\n\t```\n[[C]]":  "C",
+	} {
+		var got []string
+		for _, l := range ParseWikilinks(text) {
+			got = append(got, l.TargetRef)
+		}
+		if strings.Join(got, ",") != want {
+			t.Errorf("%q: links %v, want %s", text, got, want)
+		}
+	}
+}
+
+// An indented paragraph after a footnote definition continues the
+// footnote, as a list item's would: its links are links.
+func TestAFootnoteHoldsIndentedParagraphs(t *testing.T) {
+	links := ParseWikilinks("Text[^1]\n\n[^1]: note\n\n    see [[D]]")
+	if len(links) != 1 || links[0].TargetRef != "D" {
+		t.Errorf("links = %+v", links)
+	}
+}

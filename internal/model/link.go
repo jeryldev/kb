@@ -137,6 +137,16 @@ func ClosesFence(line, fence string) bool {
 	return m != nil && m[1][0] == fence[0] && len(m[1]) >= len(fence) && strings.TrimSpace(m[2]) == ""
 }
 
+// escaped reports whether the byte at i is preceded by an odd number of
+// backslashes.
+func escaped(s string, i int) bool {
+	n := 0
+	for j := i - 1; j >= 0 && s[j] == '\\'; j-- {
+		n++
+	}
+	return n%2 == 1
+}
+
 // CodeSpans are the byte ranges of a line's code spans: a run of backticks
 // up to the next run of exactly as many (CommonMark 6.1).
 func CodeSpans(line string) [][2]int {
@@ -151,6 +161,11 @@ func CodeSpans(line string) [][2]int {
 	for i := 0; i < len(line); {
 		n := run(i)
 		if n == 0 {
+			i++
+			continue
+		}
+		// A backslash before a backtick makes it text, not an opener.
+		if escaped(line, i) {
 			i++
 			continue
 		}
@@ -199,31 +214,108 @@ func linkMatches(text string) [][]int {
 	return out
 }
 
-// wikilinkMatches finds every wikilink and embed outside code.
-func wikilinkMatches(text string) []wikilinkMatch {
+var (
+	// A footnote definition ([^1]: text) holds indented paragraphs as a
+	// list item does.
+	listItemRe   = regexp.MustCompile(`^ {0,3}(?:[-*+]|\d{1,9}[.)]|\[\^[^\]]+\]:)(?:[ \t]|$)`)
+	listMarkerRe = regexp.MustCompile(`^(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)`)
+	headingLine  = regexp.MustCompile(`^ {0,3}#{1,6}(?:[ \t]|$)`)
+	breakLine    = regexp.MustCompile(`^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$`)
+)
+
+// indentWidth is a line's indent in columns, a tab reaching the next
+// multiple of four, as CommonMark counts it.
+func indentWidth(line string) int {
+	w := 0
+	for _, r := range line {
+		switch r {
+		case ' ':
+			w++
+		case '\t':
+			w += 4 - w%4
+		default:
+			return w
+		}
+	}
+	return w
+}
+
+// codeRanges are the byte ranges of text that are code, as CommonMark
+// reads it: fenced blocks (inside a list item too, indented with it),
+// indented code blocks (four columns after a blank line, outside a list),
+// and code spans, which may run across the lines of one paragraph but not
+// past a heading, a thematic break, a table row or a new list item.
+func codeRanges(text string) [][2]int {
 	var code [][2]int
 	offset := 0
-	fence := ""
-	fenceStart := 0
+	fence, fenceStart := "", 0
+	inList, afterBlank := false, true
+	paraStart, paraEnd := -1, -1
+	spans := func(from, to int) {
+		for _, m := range CodeSpans(text[from:to]) {
+			code = append(code, [2]int{from + m[0], from + m[1]})
+		}
+	}
+	endParagraph := func() {
+		if paraStart >= 0 {
+			spans(paraStart, paraEnd)
+		}
+		paraStart = -1
+	}
 	for _, line := range strings.SplitAfter(text, "\n") {
+		trimmed := strings.TrimLeft(line, " \t")
+		indent := indentWidth(line)
+		blank := strings.TrimSpace(line) == ""
+		bare := strings.TrimRight(line, "\r\n")
 		switch {
 		case fence != "":
-			if ClosesFence(line, fence) {
+			if ClosesFence(line, fence) || (inList && ClosesFence(trimmed, fence)) {
 				code = append(code, [2]int{fenceStart, offset + len(line)})
 				fence = ""
 			}
-		case OpeningFence(line) != "":
-			fence, fenceStart = OpeningFence(line), offset
-		default:
-			for _, m := range CodeSpans(line) {
-				code = append(code, [2]int{offset + m[0], offset + m[1]})
+		case OpeningFence(line) != "" || (inList && indent > 3 && OpeningFence(trimmed) != ""):
+			endParagraph()
+			if indent == 0 {
+				inList = false // a fence at the margin ends a list
 			}
+			fence, fenceStart = OpeningFence(trimmed), offset
+		case blank:
+			endParagraph()
+		case indent >= 4 && afterBlank && !inList && paraStart < 0:
+			code = append(code, [2]int{offset, offset + len(line)})
+		case headingLine.MatchString(bare) || strings.HasPrefix(trimmed, "|"):
+			// A heading or a table row is a block of its own line.
+			endParagraph()
+			spans(offset, offset+len(line))
+		case breakLine.MatchString(bare):
+			// A thematic break, or a setext heading's underline: either
+			// way the paragraph ends.
+			endParagraph()
+		default:
+			if listItemRe.MatchString(line) || (inList && listMarkerRe.MatchString(trimmed)) {
+				endParagraph()
+				inList = true
+			} else if indent == 0 && afterBlank {
+				inList = false
+			}
+			if paraStart < 0 {
+				paraStart = offset
+			}
+			paraEnd = offset + len(line)
 		}
+		afterBlank = blank
 		offset += len(line)
 	}
+	endParagraph()
 	if fence != "" {
 		code = append(code, [2]int{fenceStart, len(text)})
 	}
+	return code
+}
+
+// wikilinkMatches finds every wikilink and embed outside code.
+func wikilinkMatches(text string) []wikilinkMatch {
+	code := codeRanges(text)
 	inCode := func(pos int) bool {
 		for _, r := range code {
 			if pos >= r[0] && pos < r[1] {
