@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jeryldev/kb/internal/model"
 )
@@ -386,5 +387,47 @@ func TestAVaultNotCreatedYetLocksAsItsRealPlace(t *testing.T) {
 	}
 	if got, want := ResolvePath(filepath.Join(link, "vault", "Note.md")), filepath.Join(ResolvePath(real), "vault", "Note.md"); got != want {
 		t.Errorf("ResolvePath = %s, want %s", got, want)
+	}
+}
+
+// Locks come from a fixed set of files, however many files kb writes.
+func TestLockFilesStayFew(t *testing.T) {
+	s := testStore(t)
+	for i := 0; i < 400; i++ {
+		if _, err := s.CreateNote(fmt.Sprintf("note %d", i), "", "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, _ := os.ReadDir(s.opts.LockDir)
+	if len(entries) > lockStripes {
+		t.Errorf("%d lock files for 400 notes", len(entries))
+	}
+}
+
+// Two paths that share a lock file can be locked one inside the other by
+// one store without waiting on itself.
+func TestNestedLocksOnOneLockFileDoNotWait(t *testing.T) {
+	s := testStore(t)
+	done := make(chan error, 1)
+	go func() {
+		unlock, err := s.lockPath("/x/a.md")
+		if err != nil {
+			done <- err
+			return
+		}
+		defer unlock()
+		inner, err := s.lockPath("/x/a.md")
+		if err == nil {
+			inner()
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a nested lock waited on itself")
 	}
 }

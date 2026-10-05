@@ -203,3 +203,69 @@ func TestSetextHeadingsAreLanes(t *testing.T) {
 		t.Errorf("after a rename:\n%s", b.Render())
 	}
 }
+
+// The Archive heading counts in the board's language, read from its
+// **Complete** marker, else from $KB_LANG; with neither kb cannot know
+// Obsidian's language, and any language's word counts.
+func TestTheArchiveHeadingIsInTheBoardsLanguage(t *testing.T) {
+	t.Setenv("KB_LANG", "")
+	english := front + "## Done\n\n**Complete**\n- [x] a ^abcd1234\n\n***\n\n## Archiv\n\n- [ ] b ^abcd5678\n"
+	if b := mustParse(t, english); b.Archive != nil || b.Lane("Archiv") == nil {
+		t.Errorf("on an English board, Archiv is a lane")
+	}
+	german := front + "## Fertig\n\n**Fertiggestellt**\n- [x] a ^abcd1234\n\n***\n\n## Archiv\n\n- [ ] b ^abcd5678\n"
+	if b := mustParse(t, german); b.Archive == nil {
+		t.Errorf("on a German board, Archiv is the archive")
+	}
+	unmarked := front + "## Todo\n\n- [ ] a ^abcd1234\n\n***\n\n## Archiv\n\n- [ ] b ^abcd5678\n"
+	if b := mustParse(t, unmarked); b.Archive == nil {
+		t.Errorf("with no language known, any Archive word counts")
+	}
+	t.Setenv("KB_LANG", "en")
+	if b := mustParse(t, unmarked); b.Archive != nil {
+		t.Errorf("with KB_LANG=en, Archiv is a lane")
+	}
+	t.Setenv("KB_LANG", "de")
+	b := mustParse(t, front+"## Todo\n\n- [ ] a ^abcd1234\n")
+	b.ArchiveItem("abcd1234")
+	if !strings.Contains(string(b.Render()), "## Archiv\n") {
+		t.Errorf("a new archive with KB_LANG=de:\n%s", b.Render())
+	}
+}
+
+// Older plugin versions joined a lane title's lines with <br>; kb shows
+// them on one line, and leaves the heading as written until renamed.
+func TestBrInALaneTitle(t *testing.T) {
+	src := front + "## Lane<br>two\n\n- [ ] a ^abcd1234\n"
+	b := mustParse(t, src)
+	if b.Lanes[0].Title != "Lane two" {
+		t.Errorf("title = %q", b.Lanes[0].Title)
+	}
+	b.Add("Lane two", "b", "")
+	if out := string(b.Render()); !strings.Contains(out, "## Lane<br>two\n") {
+		t.Errorf("the heading was rewritten:\n%s", out)
+	}
+}
+
+// $KB_LANG is Obsidian's language, which the plugin reads markers in: it
+// wins over a marker written in another language, and takes Obsidian's
+// own codes (zh; languages the plugin has no words for read as English).
+func TestKBLangIsObsidiansLanguage(t *testing.T) {
+	board := front + "## Done\n\n**Complete**\n- [x] a ^abcd1234\n\n***\n\n## Archiv\n\n- [ ] b ^abcd5678\n"
+	t.Setenv("KB_LANG", "de")
+	if b := mustParse(t, board); b.Archive == nil || b.Lanes[0].Complete {
+		t.Errorf("Obsidian in German: Archiv is the archive and **Complete** is text (archive %v, complete %v)", b.Archive != nil, b.Lanes[0].Complete)
+	}
+	for lang, archive := range map[string]string{"zh": "归档", "zh-CN": "归档", "es": "Archive", "fr": "Archive", "pt-BR": "Arquivado"} {
+		t.Setenv("KB_LANG", lang)
+		b := mustParse(t, front+"## Todo\n\n- [ ] a ^abcd1234\n")
+		b.ArchiveItem("abcd1234")
+		if !strings.Contains(string(b.Render()), "## "+archive+"\n") {
+			t.Errorf("KB_LANG=%s: want ## %s\n%s", lang, archive, b.Render())
+		}
+	}
+	t.Setenv("KB_LANG", "es")
+	if b := mustParse(t, front+"## Todo\n\n- [ ] a ^abcd1234\n\n***\n\n## Archiv\n\n- [ ] b ^abcd5678\n"); b.Archive != nil {
+		t.Error("KB_LANG=es reads as English: Archiv is a lane")
+	}
+}

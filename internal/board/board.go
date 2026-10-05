@@ -15,6 +15,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -51,6 +52,7 @@ type Board struct {
 	indent      string // continuation indent the file uses: a tab or 4 spaces
 	crlf        bool   // the file's lines end in CRLF
 	bom         bool   // the file starts with a byte-order mark
+	locale      string // the board's Obsidian language, or "" (boardLocale)
 	changed     bool   // a card was added, moved, archived or deleted
 }
 
@@ -123,7 +125,8 @@ func ParseSalted(data []byte, salt string) (*Board, error) {
 		}
 	}
 
-	st := scanStructure(body)
+	b.locale = boardLocale(body)
+	st := scanStructure(body, b.locale)
 	end := len(body)
 	if st.trailer >= 0 {
 		end = st.trailer
@@ -146,7 +149,9 @@ func ParseSalted(data []byte, salt string) (*Board, error) {
 			lane.underline = body[start]
 			start++
 		}
-		lane.Title, lane.MaxItems = parseLaneTitle(ls.title)
+		// Older plugin versions joined a title's lines with <br>.
+		title := strings.Join(strings.Fields(strings.ReplaceAll(ls.title, "<br>", " ")), " ")
+		lane.Title, lane.MaxItems = parseLaneTitle(title)
 		lane.origTitle, lane.origMax = lane.Title, lane.MaxItems
 		spans := ls.items
 		for l := start; l < laneEnd; {
@@ -228,7 +233,7 @@ type structure struct {
 // continuation lines and indented paragraphs after a blank line included.
 // A lane's cards are the items of the first list after its heading; the
 // plugin ignores anything else between headings.
-func scanStructure(body []string) structure {
+func scanStructure(body []string, locale string) structure {
 	src := []byte(strings.Join(body, "\n"))
 	starts := make([]int, len(body))
 	off := 0
@@ -265,7 +270,7 @@ func scanStructure(body []string) structure {
 				line:    line,
 				setext:  setext,
 				title:   title,
-				archive: isArchiveWord(title) && prev != nil && prev.Kind() == ast.KindThematicBreak,
+				archive: isArchiveWord(title, locale) && prev != nil && prev.Kind() == ast.KindThematicBreak,
 			})
 			lane = &st.lanes[len(st.lanes)-1]
 			listSeen = false
@@ -278,7 +283,7 @@ func scanStructure(body []string) structure {
 				st.trailer = line
 				return st
 			}
-			if lane != nil && !listSeen && n.Lines().Len() == 1 && isCompleteMarker(body[line]) {
+			if lane != nil && !listSeen && n.Lines().Len() == 1 && isCompleteMarkerIn(body[line], locale) {
 				lane.complete = true
 				lane.completeLine = body[line]
 			}
@@ -357,18 +362,61 @@ var (
 	setextUnderline = regexp.MustCompile(`^ {0,3}(?:=+|-+)[ \t]*$`)
 )
 
-func isArchiveWord(title string) bool {
+// isArchiveWord reports whether a heading names the archive in the
+// board's language, or in any language when that is not known.
+func isArchiveWord(title, locale string) bool {
 	for _, m := range localeMarkers {
-		if title == m.Archive {
+		if title == m.Archive && (locale == "" || locale == m.Locale) {
 			return true
 		}
 	}
 	return false
 }
 
-func isCompleteMarker(line string) bool {
+// boardLocale is the language the plugin reads the board's **Complete**
+// marker and Archive heading in: Obsidian's, which $KB_LANG names when
+// set. Otherwise kb cannot see Obsidian's language and takes the board's
+// marker as the clue, or "" (any language) when it has none.
+func boardLocale(body []string) string {
+	if env := envLocale(); env != "" {
+		return env
+	}
+	for _, line := range body {
+		for _, m := range localeMarkers {
+			if strings.TrimRight(line, "\r") == "**"+m.Complete+"**" {
+				return m.Locale
+			}
+		}
+	}
+	return ""
+}
+
+// envLocale is $KB_LANG as one of the plugin's languages. It takes
+// Obsidian's codes: "zh" is the plugin's zh-cn, and a language the plugin
+// has no words for (es, fr...) reads as English, as in the plugin.
+func envLocale() string {
+	lang := strings.ToLower(strings.TrimSpace(os.Getenv("KB_LANG")))
+	switch lang {
+	case "":
+		return ""
+	case "zh":
+		return "zh-cn"
+	}
 	for _, m := range localeMarkers {
-		if line == "**"+m.Complete+"**" {
+		if lang == m.Locale {
+			return lang
+		}
+	}
+	return "en"
+}
+
+func isCompleteMarker(line string) bool { return isCompleteMarkerIn(line, "") }
+
+// isCompleteMarkerIn reports whether a line is the **Complete** marker in
+// the language, or in any language when it is "".
+func isCompleteMarkerIn(line, locale string) bool {
+	for _, m := range localeMarkers {
+		if line == "**"+m.Complete+"**" && (locale == "" || locale == m.Locale) {
 			return true
 		}
 	}
@@ -589,14 +637,16 @@ func (b *Board) Delete(id string) error {
 	return nil
 }
 
-// archiveWord is the Archive heading in the board's language, read from
-// its **Complete** marker when it has one.
+// archiveWord is the Archive heading in the board's language (see
+// boardLocale), in English when that is not known.
 func (b *Board) archiveWord() string {
-	for _, l := range b.Lanes {
-		for _, m := range localeMarkers {
-			if l.completeLine != "" && l.completeLine == "**"+m.Complete+"**" {
-				return m.Archive
-			}
+	locale := b.locale
+	if locale == "" {
+		locale = envLocale()
+	}
+	for _, m := range localeMarkers {
+		if m.Locale == locale {
+			return m.Archive
 		}
 	}
 	return archiveName

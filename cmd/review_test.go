@@ -1013,3 +1013,22 @@ func TestGraphOpenReusesOnePage(t *testing.T) {
 		t.Errorf("pages = %v", pages)
 	}
 }
+
+// -T is the title on card edit as it is on note edit; -t still works.
+func TestCardEditTakesTitleAsCapitalT(t *testing.T) {
+	setupTestDB(t)
+	executeCmd(t, "boards", "create", "B")
+	var c struct {
+		ID    string `json:"id"`
+		Title string `json:"title"`
+	}
+	json.Unmarshal([]byte(executeCmd(t, "card", "add", "old", "-B", "B", "--json")), &c)
+	json.Unmarshal([]byte(executeCmd(t, "card", "edit", c.ID, "-B", "B", "-T", "new", "--json")), &c)
+	if c.Title != "new" {
+		t.Errorf("-T: title = %q", c.Title)
+	}
+	json.Unmarshal([]byte(executeCmd(t, "card", "edit", c.ID, "-B", "B", "-t", "newer", "--json")), &c)
+	if c.Title != "newer" {
+		t.Errorf("-t: title = %q", c.Title)
+	}
+}

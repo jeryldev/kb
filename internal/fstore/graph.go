@@ -13,12 +13,17 @@ func (s *Store) GraphSource() graph.Source {
 	for _, b := range s.ListBoards() {
 		src.Boards = append(src.Boards, graph.Item{ID: b.ID, Label: b.Name, WorkspaceID: b.WorkspaceID})
 	}
+	seen := map[string]bool{}
 	for _, l := range s.links {
 		if l.SourceType == "card" {
 			boardPath, cardID, _ := cutHash(l.SourceID)
+			if seen[l.SourceID] {
+				continue
+			}
 			if bf := s.boardByPath(boardPath); bf != nil {
 				if it, _ := bf.b.Find(cardID); it != nil {
-					src.Cards = append(src.Cards, graph.Item{ID: l.SourceID, Label: it.Title, WorkspaceID: s.workspaceIDForName(bf.b.Front.Workspace())})
+					seen[l.SourceID] = true
+					src.Cards = append(src.Cards, graph.Item{ID: l.SourceID, Label: it.Title, WorkspaceID: s.workspaceIDForName(bf.b.Front.Workspace()), CardID: cardID, Board: bf.name()})
 				}
 			}
 		}

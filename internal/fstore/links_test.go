@@ -138,3 +138,79 @@ func TestABoardNamedWithAHashKeepsItsLinks(t *testing.T) {
 		}
 	}
 }
+
+// A note is not created or renamed to a board's name: [[Work]] would
+// then stop naming the board.
+func TestANoteDoesNotTakeABoardsName(t *testing.T) {
+	s := testStore(t)
+	if _, err := s.CreateBoard("Work", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateNote("work", "", "", ""); err == nil || !strings.Contains(err.Error(), "board") {
+		t.Errorf("create: err = %v", err)
+	}
+	n, err := s.CreateNote("Other", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.RenameNote(n.ID, "Work"); err == nil || !strings.Contains(err.Error(), "board") {
+		t.Errorf("rename: err = %v", err)
+	}
+}
+
+// A card in the graph says which card and board it is, as kb cards
+// names them, so the two can be joined.
+func TestGraphCardsCarryTheirCardIDAndBoard(t *testing.T) {
+	s := testStore(t)
+	put(t, s, "Target.md", "body")
+	put(t, s, "Boards/Sprint.md", "---\nkanban-plugin: board\n---\n\n## Todo\n\n- [ ] see [[Target]] ^abcd1234\n")
+	reload(t, s)
+	for _, c := range s.GraphSource().Cards {
+		if c.CardID != "abcd1234" || c.Board != "Sprint" {
+			t.Errorf("card = %+v", c)
+		}
+	}
+	if len(s.GraphSource().Cards) != 1 {
+		t.Errorf("cards = %d", len(s.GraphSource().Cards))
+	}
+}
+
+// A link in a card's description is rewritten on a rename however the
+// description starts, as it is read: title and description together.
+func TestARenameRewritesALinkInAnIndentedCardLine(t *testing.T) {
+	s := testStore(t)
+	put(t, s, "Target.md", "body")
+	put(t, s, "Boards/Sprint.md", "---\nkanban-plugin: board\n---\n\n## Todo\n\n- [ ] parent task\n        - sub see [[Target]]\n\n")
+	reload(t, s)
+	n, err := s.ResolveNote("Target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Backlinks(n.ID)) != 1 {
+		t.Fatalf("backlinks = %d", len(s.Backlinks(n.ID)))
+	}
+	if _, changed, err := s.RenameNote(n.ID, "Renamed"); err != nil || changed != 1 {
+		t.Errorf("changed = %d, err = %v", changed, err)
+	}
+	if got := read(t, s, "Boards/Sprint.md"); !strings.Contains(got, "[[Renamed]]") {
+		t.Errorf("board:\n%s", got)
+	}
+}
+
+// Nor is a board created with a note's name, nor a daily note with a
+// board's: either way [[Name]] would name two things.
+func TestBoardsAndNotesNeverShareAName(t *testing.T) {
+	s := testStore(t)
+	if _, err := s.CreateNote("Plans", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateBoard("plans", "", ""); err == nil || !strings.Contains(err.Error(), "note") {
+		t.Errorf("create board: err = %v", err)
+	}
+	if _, err := s.CreateBoard("2026-10-05", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateNoteAt("daily/2026-10-05.md", "2026-10-05", "", ""); err == nil {
+		t.Error("a daily note named like a board: want an error")
+	}
+}

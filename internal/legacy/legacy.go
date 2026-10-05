@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -276,6 +277,14 @@ func Read(dbPath string, s *fstore.Store) (*Plan, error) {
 		if other, taken := paths[strings.ToLower(path)]; taken {
 			problems = append(problems, fmt.Sprintf("boards %q and %q would both be %s; rename one in kb 0.3 first", other, b.Name, path))
 			continue
+		}
+		// kb does not let a board share a note's name: [[Name]] would name
+		// the note, never the board.
+		boardName := strings.TrimSuffix(filepath.Base(path), ".md")
+		for _, n := range s.ListNotes() {
+			if strings.EqualFold(strings.TrimSuffix(filepath.Base(n.Path), filepath.Ext(n.Path)), boardName) {
+				problems = append(problems, fmt.Sprintf("board %q has the name of the note %s; rename one first", b.Name, n.Path))
+			}
 		}
 		paths[strings.ToLower(path)] = b.Name
 		bp, errs := p.buildBoard(b, nameOf(b.WorkspaceID), colsOf[b.ID], cardsOf)

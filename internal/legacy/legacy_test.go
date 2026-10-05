@@ -438,3 +438,16 @@ UPDATE cards SET labels = '!!!,ok', title = 'old' || char(13) || 'mac' WHERE id 
 		t.Errorf("board:\n%s", b)
 	}
 }
+
+// A note named like a board the import would write is a problem found
+// before anything is written, not a failure half way.
+func TestANoteNamedLikeAnImportedBoardIsAProblem(t *testing.T) {
+	s := testStore(t)
+	if _, err := s.CreateNote("kb", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Read(fixture(t, realShape), s)
+	if err == nil || !strings.Contains(err.Error(), "note") {
+		t.Errorf("err = %v", err)
+	}
+}

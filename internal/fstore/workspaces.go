@@ -599,7 +599,7 @@ func readConfigFile(abs string, out any) error {
 // The file is replaced whole, through a temporary file, never half
 // written.
 func (s *Store) editConfigFile(abs string, fn func() (any, bool, error)) error {
-	unlock, err := lockFile(s.opts.LockDir, abs)
+	unlock, err := s.lockPath(abs)
 	if err != nil {
 		return err
 	}
