@@ -182,6 +182,9 @@ type cardModel struct {
 
 	confirmForce   bool // Enter again adds the card over its column's limit
 	confirmDiscard bool // Esc asked whether to drop the typed changes
+	// descTooLong marks a description longer than the editor holds: it is
+	// shown, not edited, and saved as it was.
+	descTooLong bool
 
 	formWidth int
 }
@@ -198,9 +201,18 @@ func (c *cardModel) fill(card *model.Card) {
 	c.titleInput.SetValue(c.orig.title)
 	c.labelsInput.SetValue(c.orig.labels)
 	c.externalIDInput.SetValue(c.orig.ext)
-	c.descInput.SetValue(c.orig.desc)
+	c.descTooLong = strings.Count(c.orig.desc, "\n")+1 > descMaxLines
+	if c.descTooLong {
+		c.descInput.SetValue(fmt.Sprintf("(%d lines: too long to edit here; use kb card edit -d, or the board's file)", strings.Count(c.orig.desc, "\n")+1))
+	} else {
+		c.descInput.SetValue(c.orig.desc)
+	}
 	c.loaded = c.values()
 }
+
+// descMaxLines is the most lines the description editor holds (bubbles'
+// textarea keeps no more).
+const descMaxLines = 10000
 
 // text is what to save for each field: the card's own text where the
 // field was left alone, else what was typed.
@@ -306,8 +318,10 @@ func (a *App) updateCard(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			a.card.blurAll()
 			a.card.field = (a.card.field + step) % fieldCount
-			a.card.focusCurrent()
-			return a, nil
+			if a.card.field == fieldDescription && a.card.descTooLong {
+				a.card.field = (a.card.field + step) % fieldCount
+			}
+			return a, a.card.focusCurrent()
 		}
 		if a.card.field == fieldPriority {
 			switch key.String() {
@@ -341,17 +355,19 @@ func (c *cardModel) blurAll() {
 	c.descInput.Blur()
 }
 
-func (c *cardModel) focusCurrent() {
+// focusCurrent focuses the current field and returns its cursor's blink.
+func (c *cardModel) focusCurrent() tea.Cmd {
 	switch c.field {
 	case fieldTitle:
-		c.titleInput.Focus()
+		return c.titleInput.Focus()
 	case fieldLabels:
-		c.labelsInput.Focus()
+		return c.labelsInput.Focus()
 	case fieldExternalID:
-		c.externalIDInput.Focus()
+		return c.externalIDInput.Focus()
 	case fieldDescription:
-		c.descInput.Focus()
+		return c.descInput.Focus()
 	}
+	return nil
 }
 
 // takeUntyped sets each field the form still holds as it was in old (one
@@ -486,24 +502,35 @@ func (a *App) viewCard() string {
 	hints := " Tab/Shift+Tab: fields   h/l: priority   Enter: save (Ctrl+S in the description)   Esc: cancel"
 	return a.frame(header, hints, nil, func(w, h int) string {
 		dialogH := min(h, max(12, h*90/100))
-		// The border and padding take 4 lines, the fields 5, the blank 1.
-		c.descInput.SetHeight(max(3, dialogH-10))
+		// The border and padding take 4 lines, the fields 5, the blank 1;
+		// a short terminal drops the padding and the blank line.
+		box, blank, chrome := dialogBoxStyle, []string{""}, 10
+		if dialogH < 13 {
+			box, blank, chrome = dialogBoxStyle.Padding(0, 2), nil, 7
+		}
+		c.descInput.SetHeight(max(1, dialogH-chrome))
 		// The inputs fit the dialog: its width less the border, padding,
 		// label column and gap.
 		dialogW := min(c.formWidth, w-2)
-		inputW := max(4, dialogW-4-labelW-3)
+		valueW := max(6, dialogW-4-labelW-2)
+		// An input's view is its prompt ("> "), its text and the cursor.
+		inputW := valueW - 3
 		c.titleInput.Width, c.labelsInput.Width, c.externalIDInput.Width = inputW, inputW, inputW
-		c.descInput.SetWidth(inputW + 2)
-		form := lipgloss.JoinVertical(lipgloss.Left,
-			field("Title", c.field == fieldTitle, c.titleInput.View()),
+		c.descInput.SetWidth(valueW)
+		// The inputs lay text out by character, not by screen cell: a line
+		// of wide characters (CJK, emoji) is cut to the cells there are.
+		fit := lipgloss.NewStyle().MaxWidth(valueW).Render
+		rows := []string{
+			field("Title", c.field == fieldTitle, fit(c.titleInput.View())),
 			field("Column", false, formValueStyle.Render(c.lane)),
 			field("Priority", c.field == fieldPriority, prio),
-			field("Labels", c.field == fieldLabels, c.labelsInput.View()),
-			field("External ID", c.field == fieldExternalID, c.externalIDInput.View()),
-			"",
-			field("Description", c.field == fieldDescription, c.descInput.View()),
-		)
-		dialog := dialogBoxStyle.Width(dialogW).MaxHeight(dialogH).Render(form)
+			field("Labels", c.field == fieldLabels, fit(c.labelsInput.View())),
+			field("External ID", c.field == fieldExternalID, fit(c.externalIDInput.View())),
+		}
+		rows = append(rows, blank...)
+		rows = append(rows, field("Description", c.field == fieldDescription, c.descInput.View()))
+		form := lipgloss.JoinVertical(lipgloss.Left, rows...)
+		dialog := box.Width(dialogW).MaxHeight(dialogH).Render(form)
 		return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, dialog)
 	})
 }

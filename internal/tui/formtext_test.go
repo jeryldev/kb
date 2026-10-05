@@ -223,3 +223,68 @@ func TestTheCardFormFitsAShortTerminal(t *testing.T) {
 		t.Errorf("at 80x12:\n%s", out)
 	}
 }
+
+// A title of wide characters (CJK, emoji) stays on its row of the form.
+func TestAWideTitleKeepsTheFormInRows(t *testing.T) {
+	app, db := boardApp(t, "one")
+	c := app.selectedCard()
+	c.Title = "東京タワーに行く予定のカードのタイトル🙂🙂 and more words to fill"
+	if err := db.UpdateCard(c); err != nil {
+		t.Fatal(err)
+	}
+	app.loadBoard()
+	app.Update(tea.WindowSizeMsg{Width: 40, Height: 16})
+	app.Update(key("e"))
+	lines := strings.Split(app.View(), "\n")
+	for i, l := range lines {
+		if strings.Contains(l, "Title") {
+			if i+1 >= len(lines) || !strings.Contains(lines[i+1], "Column") {
+				t.Errorf("the title wrapped:\n%s", app.View())
+			}
+			return
+		}
+	}
+	t.Errorf("no title row:\n%s", app.View())
+}
+
+// A description longer than the editor can hold is shown, not edited, and
+// is saved as it was.
+func TestADescriptionTooLongToEditIsKept(t *testing.T) {
+	app, db := boardApp(t, "one")
+	c := app.selectedCard()
+	var lines []string
+	for i := 0; i < 10005; i++ {
+		lines = append(lines, "l")
+	}
+	c.Description = strings.Join(lines, "\n")
+	if err := db.UpdateCard(c); err != nil {
+		t.Fatal(err)
+	}
+	app.loadBoard()
+	app.Update(key("e"))
+	for i := 0; i < 4; i++ {
+		app.Update(key("tab"))
+	}
+	if app.card.field == fieldDescription {
+		t.Error("the description should not be editable here")
+	}
+	app.card.titleInput.SetValue("renamed")
+	app.Update(ctrlS())
+	if app.err != nil {
+		t.Fatal(app.err)
+	}
+	if got := strings.Count(app.selectedCard().Description, "\n") + 1; got != 10005 {
+		t.Errorf("description lines = %d", got)
+	}
+}
+
+// The card form fits a 10-line terminal with its description field.
+func TestTheCardFormFitsTenLines(t *testing.T) {
+	app, _ := boardApp(t, "one")
+	app.Update(tea.WindowSizeMsg{Width: 80, Height: 10})
+	app.Update(key("e"))
+	out := app.View()
+	if !strings.Contains(out, "Description") || lipgloss.Height(out) > 10 {
+		t.Errorf("at 80x10:\n%s", out)
+	}
+}
